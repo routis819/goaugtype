@@ -27,7 +27,12 @@ func nonTreeBuilder() int {
 	return 0
 }
 
+var gbvalt Tree = nil
+
+var just int8
+
 func main() {
+	gbvalt = &Leaf{}
 	var valt Tree = &Leaf{}
 	valt = Leaf{} // should make error
 	valt = &Node{}
@@ -36,18 +41,26 @@ func main() {
 	valt = &NotTree{} // should make error
 	valt = NotTree{}  // should make error
 	valt = treeBuilder()
-	valt = nonTreeBuilder()
+	valt = nonTreeBuilder() // should make error
+
+	valt1 := treeBuilder()
+	fmt.Printf("valt1: %v\n", valt1)
+	valt1 = 2
+
+	valt2 := nonTreeBuilder()
+	fmt.Printf("valt2: %v\n", valt2)
+	valt2 = 2
 
 	// should NOT make error
 	switch valt.(type) {
-	case *Tree:
+	case *Leaf:
 	case *Node:
 	case nil:
 	}
 
 	// should make error
 	switch valt.(type) {
-	case *Tree:
+	case *Leaf:
 	case *Node:
 	}
 
