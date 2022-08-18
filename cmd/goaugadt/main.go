@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/token"
+	"go/types"
 	"os"
 	"strings"
 
@@ -19,28 +21,23 @@ const pkgLoadMode = packages.NeedTypes |
 	packages.NeedSyntax |
 	packages.NeedTypesInfo
 
-type decl struct {
+type goAugAdtDecl struct {
 	sumtype   string
 	permitted []string
 }
 
-type assign struct {
-	lhs, typ, ident string
+type evGoAugAdtDecl struct {
+	sumtype   types.TypeAndValue
+	permitted []types.TypeAndValue
 }
 
-type collected struct {
-	// k - type name, v - variable names
-	idmap map[string][]string
-	d     []decl
-	a     []assign
-}
-
-func parseAdtDeclCmt(cmtgrps []*ast.CommentGroup) ([]string, bool) {
+func parseAdtDeclCmt(cmtgrps []*ast.CommentGroup) ([]string, error) {
 	adtDeclLine := ""
+	var pos token.Pos
 SEARCHING:
 	for _, cmtgrp := range cmtgrps {
 		for _, cmt := range cmtgrp.List {
-			fmt.Printf("cmt.Text: %v\n", cmt.Text)
+			pos = cmt.Pos()
 			if strings.HasPrefix(cmt.Text, "// goaugadt:") {
 				adtDeclLine = strings.TrimLeft(cmt.Text, "// goaugadt:")
 				break SEARCHING
@@ -48,182 +45,269 @@ SEARCHING:
 		}
 	}
 	if adtDeclLine == "" {
-		return nil, false
+		return nil, nil
 	}
 	items := strings.Split(adtDeclLine, "|")
 	if len(items) <= 1 {
-		return nil, false
+		return nil, fmt.Errorf("invalid format, pos :%v", pos)
 	}
 	for i := range items {
 		items[i] = strings.TrimSpace(items[i])
 	}
-	return items, true
+	return items, nil
 }
 
-func analysisTypeSpec(tspc *ast.TypeSpec) (string, bool) {
+func analysisTypeSpecWithCmt(cmtmap ast.CommentMap, tspc *ast.TypeSpec) ([]goAugAdtDecl, error) {
+	cmt, ok := cmtmap[tspc]
+	if !ok {
+		return nil, nil
+	}
+	permitted, err := parseAdtDeclCmt(cmt)
+	if err != nil {
+		return nil, err
+	}
+	if permitted == nil {
+		return nil, nil
+	}
+	sumtype, err := analysisTypeSpec(tspc)
+	if err != nil {
+		return nil, err
+	}
+	return []goAugAdtDecl{{sumtype: sumtype, permitted: permitted}}, nil
+}
+
+func analysisTypeSpec(tspc *ast.TypeSpec) (string, error) {
 	switch v := tspc.Type.(type) {
 	case *ast.Ident:
-		return tspc.Name.Name, v.Name == "any"
+		if v.Name != "any" {
+			return "", fmt.Errorf("goaugadt variable should be any or interface{}, pos - %v", tspc.Pos())
+		}
+		return tspc.Name.Name, nil
 	case *ast.InterfaceType:
-		return tspc.Name.Name, len(v.Methods.List) == 0
+		if len(v.Methods.List) != 0 {
+			return "", fmt.Errorf("goaugadt variable should be any or interface{}, pos - %v", tspc.Pos())
+		}
+		return tspc.Name.Name, nil
 	default:
-		return "", false
+		return "", nil
 	}
 }
 
-func analysisGenDeclSpecs(decl *ast.GenDecl) (string, bool) {
+func analysisTypeDeclSpecs(decl *ast.GenDecl) (string, error) {
 	if len(decl.Specs) != 1 {
 		// golang allows to declare multiple types in a single
 		// parenthesis. In that case, the comment does not
 		// belong to ast.GenDecl node but ast.TypeSpec node.
-		return "", false
+		return "", fmt.Errorf("invalid format - pos:%v", decl.Pos())
 	}
 	spc := decl.Specs[0]
-	tspc, ok := spc.(*ast.TypeSpec)
-	if !ok {
-		return "", false
-	}
+	tspc := spc.(*ast.TypeSpec)
 	return analysisTypeSpec(tspc)
 }
 
-func analysisTypeDecl(cmtmap ast.CommentMap, v *ast.GenDecl) []decl {
+func analysisTypeDeclWithCmt(cmtmap ast.CommentMap, v *ast.GenDecl) ([]goAugAdtDecl, error) {
 	cmt, ok := cmtmap[v]
 	if !ok {
-		return nil
+		return nil, nil
 	}
-	permitted, ok := parseAdtDeclCmt(cmt)
-	if !ok {
-		return nil
+	permitted, err := parseAdtDeclCmt(cmt)
+	if err != nil {
+		return nil, err
 	}
-	sumtype, ok := analysisGenDeclSpecs(v)
-	if !ok {
-		return nil
+	if permitted == nil {
+		return nil, nil
 	}
-	return []decl{{sumtype: sumtype, permitted: permitted}}
+	sumtype, err := analysisTypeDeclSpecs(v)
+	if err != nil {
+		return nil, err
+	}
+	return []goAugAdtDecl{{sumtype: sumtype, permitted: permitted}}, nil
 
 }
 
-func analysisVarDecl(r map[string][]string, v *ast.GenDecl) map[string][]string {
-	vspc := v.Specs[0].(*ast.ValueSpec)
-	typename := vspc.Type.(*ast.Ident).Name
-	fmt.Printf("vspc.Values: %v\n", vspc.Values)
-	fmt.Printf("vspc.Values: %T\n", vspc.Values)
-	for i := range vspc.Values {
-		fmt.Printf("vspc.Values[i]: %v\n", vspc.Values[i])
-		fmt.Printf("vspc.Values[i]: %T\n", vspc.Values[i])
-	}
-	for i := range vspc.Names {
-		stored := r[typename]
-		stored = append(stored, vspc.Names[i].Name)
-		r[typename] = stored
-	}
-	fmt.Printf("r[typename]: %v\n", r[typename])
-	return r
+type source struct {
+	cmtmap ast.CommentMap
 }
 
-func evalUnaryExpr(expr *ast.UnaryExpr) (string, error) {
-	// var typename string
-	// switch expr.Op {
-	// case token.AND:
-	// 	typename += "*"
-	// 	rvx, ok := expr.X.(*ast.CompositeLit)
-	// 	if !ok {
-	// 		fmt.Println("cannot handle this yet.")
-	// 		continue
-	// 	}
-	// 	ident, ok := rvx.Type.(*ast.Ident)
-	// 	if !ok {
-	// 		fmt.Println("cannot handle this yet.")
-	// 		continue
-	// 	}
-	// }
-	// typ := "*" + ident.Name
-	// r = append(r, assign{lhs: idlhs.Name, typ: typ})
-	// return typename, nil
-	return "", nil
-}
-
-func analysisVarAssign(v *ast.AssignStmt) []assign {
-	var r []assign
-	for i := range v.Lhs {
-		idlhs := v.Lhs[i].(*ast.Ident)
-		fmt.Printf("idlhs.Name: %v\n", idlhs.Name)
-		switch rv := v.Rhs[i].(type) {
-		case *ast.CompositeLit:
-			ident, ok := rv.Type.(*ast.Ident)
-			if !ok {
-				fmt.Println("cannot handle this yet.")
-				continue
-			}
-			fmt.Printf("ident.Name: %v\n", ident.Name)
-			r = append(r, assign{lhs: idlhs.Name, typ: ident.Name})
-		case *ast.Ident:
-			fmt.Printf("rv.Name: %v\n", rv.Name)
-			r = append(r, assign{lhs: idlhs.Name, ident: rv.Name})
-		case *ast.UnaryExpr:
-			// evalUnaryExpr(expr * ast.UnaryExpr)
-		default:
-			fmt.Printf("Rhs is type of %T, which cannot handle yet.\n", rv)
-		}
-	}
-	return r
+type collected struct {
+	adtdecls        []goAugAdtDecl
+	declassigns     []*ast.ValueSpec
+	assignStmts     []*ast.AssignStmt
+	typeSwitchStmts []*ast.TypeSwitchStmt
+	e               []error
 }
 
 type inspector struct {
-	cmtmap ast.CommentMap
-	c      collected
+	src source
+	col collected
 }
 
 func (ispt *inspector) inspect(n ast.Node) bool {
-	// fmt.Printf("%T\n", n)
-	if ispt.cmtmap == nil {
+	if ispt.src.cmtmap == nil {
 		return false
 	}
 	switch v := n.(type) {
 	case *ast.AssignStmt:
-		a := analysisVarAssign(v)
-		ispt.c.a = append(ispt.c.a, a...)
-		fmt.Printf("ispt.c.a: %v\n", ispt.c.a)
+		ispt.col.assignStmts = append(ispt.col.assignStmts, v)
 	case *ast.GenDecl:
 		switch v.Tok {
 		case token.TYPE:
-			d := analysisTypeDecl(ispt.cmtmap, v)
-			ispt.c.d = append(ispt.c.d, d...)
+			d, err := analysisTypeDeclWithCmt(ispt.src.cmtmap, v)
+			if err != nil {
+				ispt.col.e = append(ispt.col.e, err)
+				break
+			}
+			ispt.col.adtdecls = append(ispt.col.adtdecls, d...)
 		case token.VAR:
-			ispt.c.idmap = analysisVarDecl(ispt.c.idmap, v)
-
+			vspc := v.Specs[0].(*ast.ValueSpec)
+			if len(vspc.Values) == 0 {
+				break
+			}
+			ispt.col.declassigns = append(ispt.col.declassigns, vspc)
 		}
 	case *ast.TypeSpec:
-		cmt, ok := ispt.cmtmap[n]
-		if !ok {
+		d, err := analysisTypeSpecWithCmt(ispt.src.cmtmap, v)
+		if err != nil {
+			ispt.col.e = append(ispt.col.e, err)
 			break
 		}
-		permitted, ok := parseAdtDeclCmt(cmt)
-		if !ok {
-			break
-		}
-		sumtype, ok := analysisTypeSpec(v)
-		if !ok {
-			break
-		}
-		ispt.c.d = append(ispt.c.d, decl{
-			sumtype: sumtype, permitted: permitted,
-		})
+		ispt.col.adtdecls = append(ispt.col.adtdecls, d...)
 	case *ast.TypeSwitchStmt:
-		// fmt.Printf("v.Assign: %v\n", v.Assign)
-		// fmt.Printf("type of v.Assign: %T\n", v.Assign)
-		// exprStmt := v.Assign.(*ast.ExprStmt)
-		// fmt.Printf("exprStmt: %v\n", exprStmt)
-		// fmt.Printf("exprStmt.X: %v\n", exprStmt.X)
-		// fmt.Printf("type of exprStmt.X: %T\n", exprStmt.X)
-		// taExprStmt := exprStmt.X.(*ast.TypeAssertExpr)
-		// fmt.Printf("taExprStmt: %v\n", taExprStmt)
-		// fmt.Printf("taExprStmt.Type: %v\n", taExprStmt.Type)
-		// fmt.Printf("taExprStmt.X: %v\n", taExprStmt.X)
-		// fmt.Printf("type of taExprStmt.X: %v\n", taExprStmt.X)
+		ispt.col.typeSwitchStmts = append(ispt.col.typeSwitchStmts, v)
 	default:
 	}
 	return true
+}
+
+func findSumtypeByType(decls []evGoAugAdtDecl, t types.Type) evGoAugAdtDecl {
+	for i := range decls {
+		if decls[i].sumtype.Type.String() == t.String() {
+			return decls[i]
+		}
+	}
+	return evGoAugAdtDecl{}
+}
+
+func isPermitted(tinfo *types.Info, sumtype evGoAugAdtDecl, expr ast.Expr) bool {
+	t := tinfo.TypeOf(expr)
+	if t == nil {
+		return false
+	}
+	if t.String() == sumtype.sumtype.Type.String() {
+		return true
+	}
+	for i := range sumtype.permitted {
+		if sumtype.permitted[i].Type.String() == t.String() {
+			return true
+		}
+	}
+	return false
+}
+
+func getIdentByName(tinfo *types.Info, n string) *ast.Ident {
+	for id := range tinfo.Defs {
+		if id.Name == n {
+			return id
+		}
+	}
+	return nil
+}
+
+func getTypeByName(tinfo *types.Info, n string) types.Object {
+	for id, tobj := range tinfo.Defs {
+		if id.Name == n {
+			return tobj
+		}
+	}
+	return nil
+}
+
+type adtError struct {
+	err error
+	pos token.Pos
+}
+
+func checkAssign(tinfo *types.Info, col collected, evdecl []evGoAugAdtDecl) []adtError {
+	var err []adtError
+	for _, a := range col.assignStmts {
+		for i, lhs := range a.Lhs {
+			lhsident := lhs.(*ast.Ident)
+			t := getTypeByName(tinfo, lhsident.Name)
+			sumt := findSumtypeByType(evdecl, t.Type())
+			if sumt.sumtype.Type == nil {
+				continue
+			}
+			if !isPermitted(tinfo, sumt, a.Rhs[i]) {
+				err = append(err, adtError{
+					err: errors.New("invalid assigning"),
+					pos: a.TokPos,
+				})
+			}
+		}
+	}
+	for _, a := range col.declassigns {
+		for i, n := range a.Names {
+			t := getTypeByName(tinfo, n.Name)
+			sumt := findSumtypeByType(evdecl, t.Type())
+			if sumt.sumtype.Type == nil {
+				continue
+			}
+			if !isPermitted(tinfo, sumt, a.Values[i]) {
+				err = append(err, adtError{
+					err: errors.New("invalid declaration"),
+					pos: a.Pos(),
+				})
+			}
+		}
+	}
+	return err
+}
+
+func checkTypeSwitch(tinfo *types.Info, col collected, evdecl []evGoAugAdtDecl) []adtError {
+	var err []adtError
+	for _, stmt := range col.typeSwitchStmts {
+		exprstmt := stmt.Assign.(*ast.ExprStmt)
+		taexpr := exprstmt.X.(*ast.TypeAssertExpr)
+		chkident := taexpr.X.(*ast.Ident)
+		t := getTypeByName(tinfo, chkident.Name)
+		sumt := findSumtypeByType(evdecl, t.Type())
+		if sumt.sumtype.Type == nil {
+			continue
+		}
+		if len(sumt.permitted) != len(stmt.Body.List) {
+			err = append(
+				err,
+				adtError{
+					err: errors.New("invalid type switch"),
+					pos: stmt.Pos(),
+				})
+		}
+		for _, bdstmt := range stmt.Body.List {
+			clause := bdstmt.(*ast.CaseClause)
+			expr := clause.List[0]
+			if !isPermitted(tinfo, sumt, expr) {
+				err = append(
+					err,
+					adtError{
+						err: errors.New("invalid type switch"),
+						pos: stmt.Pos(),
+					})
+			}
+		}
+	}
+	return err
+}
+
+func check(tinfo *types.Info, col collected, evdecl []evGoAugAdtDecl) []adtError {
+	var err []adtError
+
+	asserr := checkAssign(tinfo, col, evdecl)
+	err = append(err, asserr...)
+
+	tserr := checkTypeSwitch(tinfo, col, evdecl)
+	err = append(err, tserr...)
+
+	return err
 }
 
 func main() {
@@ -240,26 +324,41 @@ func main() {
 	}
 
 	for _, p := range pkgs {
-		// for k, v := range p.TypesInfo.Defs {
-		// 	fmt.Printf("k: %v\n", k)
-		// 	fmt.Printf("v: %v\n", v)
-		// }
-
-		// for k, v := range p.TypesInfo.Types {
-		// 	fmt.Printf("k: %v\n", k)
-		// 	fmt.Printf("v: %v\n", v)
-		// }
-
+		var err []adtError
 		for _, astf := range p.Syntax {
 			cmtmap := ast.NewCommentMap(p.Fset, astf, astf.Comments)
-			ispt := &inspector{
-				cmtmap: cmtmap,
-				c: collected{
-					idmap: map[string][]string{},
+			ispt := inspector{
+				src: source{
+					cmtmap: cmtmap,
 				},
 			}
 			ast.Inspect(astf, ispt.inspect)
+			tvAdtDecl := make([]evGoAugAdtDecl, len(ispt.col.adtdecls))
+			for i, decl := range ispt.col.adtdecls {
+				sumt, err := types.Eval(p.Fset, p.Types, token.NoPos, decl.sumtype)
+				if err != nil {
+					fmt.Fprintln(os.Stderr, err.Error())
+					os.Exit(1)
+				}
+				permitted := make([]types.TypeAndValue, len(decl.permitted))
+				for i, prm := range decl.permitted {
+					prmt, err := types.Eval(p.Fset, p.Types, token.NoPos, prm)
+					if err != nil {
+						fmt.Fprintln(os.Stderr, err.Error())
+						os.Exit(1)
+					}
+					permitted[i] = prmt
+				}
+				tvAdtDecl[i] = evGoAugAdtDecl{sumtype: sumt, permitted: permitted}
+			}
+			newerr := check(p.TypesInfo, ispt.col, tvAdtDecl)
+			err = append(err, newerr...)
+		}
+		for _, e := range err {
+			fmt.Fprintf(os.Stderr, "%s - %s\n",
+				p.Fset.Position(e.pos).String(),
+				e.err.Error(),
+			)
 		}
 	}
-
 }
