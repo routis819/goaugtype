@@ -305,8 +305,9 @@ func check(tinfo *types.Info, col collected, evdecl []evGoAugAdtDecl) []augtErro
 	return err
 }
 
-func inspect(pkg *packages.Package) []augtError {
-	var err []augtError
+func collectInfo(pkg *packages.Package) (collected, []evGoAugAdtDecl) {
+	col := collected{}
+	var pkgAdtDecl []evGoAugAdtDecl
 	for _, astf := range pkg.Syntax {
 		cmtmap := ast.NewCommentMap(pkg.Fset, astf, astf.Comments)
 		ispt := inspector{
@@ -314,7 +315,7 @@ func inspect(pkg *packages.Package) []augtError {
 			col: collected{},
 		}
 		ast.Inspect(astf, ispt.inspect)
-		tvAdtDecl := make([]evGoAugAdtDecl, len(ispt.col.adtdecls))
+		adtDecls := make([]evGoAugAdtDecl, len(ispt.col.adtdecls))
 		for i, decl := range ispt.col.adtdecls {
 			sumt, err := types.Eval(pkg.Fset, pkg.Types, token.NoPos, decl.sumtype)
 			if err != nil {
@@ -330,12 +331,21 @@ func inspect(pkg *packages.Package) []augtError {
 				}
 				permitted[i] = prmt
 			}
-			tvAdtDecl[i] = evGoAugAdtDecl{sumtype: sumt, permitted: permitted}
+			adtDecls[i] = evGoAugAdtDecl{sumtype: sumt, permitted: permitted}
 		}
-		newerr := check(pkg.TypesInfo, ispt.col, tvAdtDecl)
-		err = append(err, newerr...)
+		col.adtdecls = append(col.adtdecls, ispt.col.adtdecls...)
+		col.declassigns = append(col.declassigns, ispt.col.declassigns...)
+		col.assignStmts = append(col.assignStmts, ispt.col.assignStmts...)
+		col.typeSwitchStmts = append(col.typeSwitchStmts, ispt.col.typeSwitchStmts...)
+		col.e = append(col.e, ispt.col.e...)
+		pkgAdtDecl = append(pkgAdtDecl, adtDecls...)
 	}
-	return err
+	return col, pkgAdtDecl
+}
+
+func inspect(pkg *packages.Package) []augtError {
+	col, pkgAdtDecl := collectInfo(pkg)
+	return check(pkg.TypesInfo, col, pkgAdtDecl)
 }
 
 func printErrs(pkg *packages.Package, errs []augtError) {
@@ -350,4 +360,10 @@ func printErrs(pkg *packages.Package, errs []augtError) {
 func checkPkg(pkg *packages.Package) {
 	errs := inspect(pkg)
 	printErrs(pkg, errs)
+}
+
+func checkPkgs(pkgs []*packages.Package) {
+	for _, pkg := range pkgs {
+		checkPkg(pkg)
+	}
 }
