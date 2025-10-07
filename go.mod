@@ -1,10 +1,10 @@
 module github.com/routiz/goaugt
 
-go 1.19
+go 1.25
 
-require golang.org/x/tools v0.1.12
+require golang.org/x/tools v0.37.0
 
 require (
-	golang.org/x/mod v0.6.0-dev.0.20220419223038-86c51ed26bb4 // indirect
-	golang.org/x/sys v0.0.0-20220722155257-8c9f86f7a55f // indirect
+	golang.org/x/mod v0.28.0 // indirect
+	golang.org/x/sync v0.17.0 // indirect
 )
