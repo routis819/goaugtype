@@ -18,14 +18,14 @@ var Analyzer = &analysis.Analyzer{
 	Run:  run,
 }
 
-func run(pass *analysis.Pass) (interface{}, error) {
+func run(pass *analysis.Pass) (any, error) {
 	col, pkgAdtDecl := collectInfo(pass)
 	// TODO: handle errors from collectInfo
 
 	errs := check(pass.TypesInfo, col, pkgAdtDecl)
 
 	for _, e := range errs {
-		pass.Reportf(e.pos, e.err.Error())
+		pass.Reportf(e.pos, "%v", e.err)
 	}
 
 	return nil, nil
@@ -36,12 +36,13 @@ type augtError struct {
 	pos token.Pos
 }
 
-type goAugAdtDecl struct {
+type goAugADTDecl struct {
 	sumtype   string
 	permitted []string
 }
 
-type evGoAugAdtDecl struct {
+// goAugADTDecl -> (eval) -> evGoAugADTDecl
+type evGoAugADTDecl struct {
 	sumtype   types.TypeAndValue
 	permitted []types.TypeAndValue
 }
@@ -53,8 +54,9 @@ SEARCHING:
 	for _, cmtgrp := range cmtgrps {
 		for _, cmt := range cmtgrp.List {
 			pos = cmt.Pos()
-			if strings.HasPrefix(cmt.Text, "// goaugadt:") {
-				adtDeclLine = strings.TrimLeft(cmt.Text, "// goaugadt:")
+			if after, ok := strings.CutPrefix(cmt.Text, "// goaugadt:"); ok {
+				adtDeclLine = after
+
 				break SEARCHING
 			}
 		}
@@ -69,10 +71,11 @@ SEARCHING:
 	for i := range items {
 		items[i] = strings.TrimSpace(items[i])
 	}
+
 	return items, nil
 }
 
-func analysisTypeSpecWithCmt(cmtmap ast.CommentMap, tspc *ast.TypeSpec) ([]goAugAdtDecl, error) {
+func analysisTypeSpecWithCmt(cmtmap ast.CommentMap, tspc *ast.TypeSpec) ([]goAugADTDecl, error) {
 	cmt, ok := cmtmap[tspc]
 	if !ok {
 		return nil, nil
@@ -88,7 +91,8 @@ func analysisTypeSpecWithCmt(cmtmap ast.CommentMap, tspc *ast.TypeSpec) ([]goAug
 	if err != nil {
 		return nil, err
 	}
-	return []goAugAdtDecl{{sumtype: sumtype, permitted: permitted}}, nil
+
+	return []goAugADTDecl{{sumtype: sumtype, permitted: permitted}}, nil
 }
 
 func analysisTypeSpec(tspc *ast.TypeSpec) (string, error) {
@@ -97,11 +101,13 @@ func analysisTypeSpec(tspc *ast.TypeSpec) (string, error) {
 		if v.Name != "any" {
 			return "", fmt.Errorf("goaugadt variable should be any or interface{}, pos - %v", tspc.Pos())
 		}
+
 		return tspc.Name.Name, nil
 	case *ast.InterfaceType:
 		if len(v.Methods.List) != 0 {
 			return "", fmt.Errorf("goaugadt variable should be any or interface{}, pos - %v", tspc.Pos())
 		}
+
 		return tspc.Name.Name, nil
 	default:
 		return "", nil
@@ -117,10 +123,11 @@ func analysisTypeDeclSpecs(decl *ast.GenDecl) (string, error) {
 	}
 	spc := decl.Specs[0]
 	tspc := spc.(*ast.TypeSpec)
+
 	return analysisTypeSpec(tspc)
 }
 
-func analysisTypeDeclWithCmt(cmtmap ast.CommentMap, v *ast.GenDecl) ([]goAugAdtDecl, error) {
+func analysisTypeDeclWithCmt(cmtmap ast.CommentMap, v *ast.GenDecl) ([]goAugADTDecl, error) {
 	cmt, ok := cmtmap[v]
 	if !ok {
 		return nil, nil
@@ -136,7 +143,8 @@ func analysisTypeDeclWithCmt(cmtmap ast.CommentMap, v *ast.GenDecl) ([]goAugAdtD
 	if err != nil {
 		return nil, err
 	}
-	return []goAugAdtDecl{{sumtype: sumtype, permitted: permitted}}, nil
+
+	return []goAugADTDecl{{sumtype: sumtype, permitted: permitted}}, nil
 
 }
 
@@ -145,8 +153,8 @@ type source struct {
 }
 
 type collected struct {
-	adtdecls        []goAugAdtDecl
-	declassigns     []*ast.ValueSpec
+	adtDecls        []goAugADTDecl
+	declAssigns     []*ast.ValueSpec
 	assignStmts     []*ast.AssignStmt
 	typeSwitchStmts []*ast.TypeSwitchStmt
 	e               []error
@@ -170,40 +178,45 @@ func (ispt *inspector) inspect(n ast.Node) bool {
 			d, err := analysisTypeDeclWithCmt(ispt.src.cmtmap, v)
 			if err != nil {
 				ispt.col.e = append(ispt.col.e, err)
+
 				break
 			}
-			ispt.col.adtdecls = append(ispt.col.adtdecls, d...)
+			ispt.col.adtDecls = append(ispt.col.adtDecls, d...)
 		case token.VAR:
 			vspc := v.Specs[0].(*ast.ValueSpec)
 			if len(vspc.Values) == 0 {
 				break
 			}
-			ispt.col.declassigns = append(ispt.col.declassigns, vspc)
+			ispt.col.declAssigns = append(ispt.col.declAssigns, vspc)
 		}
 	case *ast.TypeSpec:
 		d, err := analysisTypeSpecWithCmt(ispt.src.cmtmap, v)
 		if err != nil {
 			ispt.col.e = append(ispt.col.e, err)
+
 			break
 		}
-		ispt.col.adtdecls = append(ispt.col.adtdecls, d...)
+		ispt.col.adtDecls = append(ispt.col.adtDecls, d...)
 	case *ast.TypeSwitchStmt:
 		ispt.col.typeSwitchStmts = append(ispt.col.typeSwitchStmts, v)
 	default:
+		break
 	}
+
 	return true
 }
 
-func findSumtypeByType(decls []evGoAugAdtDecl, t types.Type) evGoAugAdtDecl {
+func findSumtypeByType(decls []evGoAugADTDecl, t types.Type) evGoAugADTDecl {
 	for i := range decls {
 		if decls[i].sumtype.Type.String() == t.String() {
 			return decls[i]
 		}
 	}
-	return evGoAugAdtDecl{}
+
+	return evGoAugADTDecl{}
 }
 
-func isPermitted(tinfo *types.Info, sumtype evGoAugAdtDecl, expr ast.Expr) bool {
+func isPermitted(tinfo *types.Info, sumtype evGoAugADTDecl, expr ast.Expr) bool {
 	t := tinfo.TypeOf(expr)
 	if t == nil {
 		return false
@@ -216,16 +229,8 @@ func isPermitted(tinfo *types.Info, sumtype evGoAugAdtDecl, expr ast.Expr) bool 
 			return true
 		}
 	}
-	return false
-}
 
-func getIdentByName(tinfo *types.Info, n string) *ast.Ident {
-	for id := range tinfo.Defs {
-		if id.Name == n {
-			return id
-		}
-	}
-	return nil
+	return false
 }
 
 func getTypeByName(tinfo *types.Info, n string) types.Object {
@@ -234,10 +239,11 @@ func getTypeByName(tinfo *types.Info, n string) types.Object {
 			return tobj
 		}
 	}
+
 	return nil
 }
 
-func checkAssign(tinfo *types.Info, col collected, evdecl []evGoAugAdtDecl) []augtError {
+func checkAssign(tinfo *types.Info, col collected, evdecl []evGoAugADTDecl) []augtError {
 	var errs []augtError
 	for _, a := range col.assignStmts {
 		for i, lhs := range a.Lhs {
@@ -261,7 +267,7 @@ func checkAssign(tinfo *types.Info, col collected, evdecl []evGoAugAdtDecl) []au
 			}
 		}
 	}
-	for _, a := range col.declassigns {
+	for _, a := range col.declAssigns {
 		for i, n := range a.Names {
 			t := getTypeByName(tinfo, n.Name)
 			if t == nil {
@@ -279,10 +285,11 @@ func checkAssign(tinfo *types.Info, col collected, evdecl []evGoAugAdtDecl) []au
 			}
 		}
 	}
+
 	return errs
 }
 
-func checkTypeSwitch(tinfo *types.Info, col collected, evdecl []evGoAugAdtDecl) []augtError {
+func checkTypeSwitch(tinfo *types.Info, col collected, evdecl []evGoAugADTDecl) []augtError {
 	var errs []augtError
 	for _, stmt := range col.typeSwitchStmts {
 		exprstmt, ok := stmt.Assign.(*ast.ExprStmt)
@@ -329,10 +336,11 @@ func checkTypeSwitch(tinfo *types.Info, col collected, evdecl []evGoAugAdtDecl) 
 			}
 		}
 	}
+
 	return errs
 }
 
-func check(tinfo *types.Info, col collected, evdecl []evGoAugAdtDecl) []augtError {
+func check(tinfo *types.Info, col collected, evdecl []evGoAugADTDecl) []augtError {
 	var errs []augtError
 
 	asserr := checkAssign(tinfo, col, evdecl)
@@ -344,9 +352,9 @@ func check(tinfo *types.Info, col collected, evdecl []evGoAugAdtDecl) []augtErro
 	return errs
 }
 
-func collectInfo(pass *analysis.Pass) (collected, []evGoAugAdtDecl) {
+func collectInfo(pass *analysis.Pass) (collected, []evGoAugADTDecl) {
 	col := collected{}
-	var pkgAdtDecl []evGoAugAdtDecl
+	var pkgADTDecl []evGoAugADTDecl
 	for _, astf := range pass.Files {
 		cmtmap := ast.NewCommentMap(pass.Fset, astf, astf.Comments)
 		ispt := inspector{
@@ -354,8 +362,9 @@ func collectInfo(pass *analysis.Pass) (collected, []evGoAugAdtDecl) {
 			col: collected{},
 		}
 		ast.Inspect(astf, ispt.inspect)
-		adtDecls := make([]evGoAugAdtDecl, len(ispt.col.adtdecls))
-		for i, decl := range ispt.col.adtdecls {
+		adtDecls := make([]evGoAugADTDecl, len(ispt.col.adtDecls))
+		for i, decl := range ispt.col.adtDecls {
+			// FIXME(isr): try to provide valid token position.
 			sumt, err := types.Eval(pass.Fset, pass.Pkg, token.NoPos, decl.sumtype)
 			if err != nil {
 				// TODO: create a proper error
@@ -372,14 +381,15 @@ func collectInfo(pass *analysis.Pass) (collected, []evGoAugAdtDecl) {
 				}
 				permitted[j] = prmt
 			}
-			adtDecls[i] = evGoAugAdtDecl{sumtype: sumt, permitted: permitted}
+			adtDecls[i] = evGoAugADTDecl{sumtype: sumt, permitted: permitted}
 		}
-		col.adtdecls = append(col.adtdecls, ispt.col.adtdecls...)
-		col.declassigns = append(col.declassigns, ispt.col.declassigns...)
+		col.adtDecls = append(col.adtDecls, ispt.col.adtDecls...)
+		col.declAssigns = append(col.declAssigns, ispt.col.declAssigns...)
 		col.assignStmts = append(col.assignStmts, ispt.col.assignStmts...)
 		col.typeSwitchStmts = append(col.typeSwitchStmts, ispt.col.typeSwitchStmts...)
 		col.e = append(col.e, ispt.col.e...)
-		pkgAdtDecl = append(pkgAdtDecl, adtDecls...)
+		pkgADTDecl = append(pkgADTDecl, adtDecls...)
 	}
-	return col, pkgAdtDecl
+
+	return col, pkgADTDecl
 }

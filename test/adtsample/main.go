@@ -6,7 +6,7 @@ import (
 
 // Tree 는 트리구조를 나타내는 타입. ADT 테스트용으로 매우 적절함.
 // goaugadt: *Leaf | *Node | nil
-type Tree interface{} // type spec line comment
+type Tree any // type spec line comment
 
 type Leaf struct{}
 
@@ -15,6 +15,7 @@ type Node struct{}
 type NotTree struct{}
 
 type (
+	// TestInt is a sum type of all int family.
 	// goaugadt: int8 | int16 | int32 | int64
 	TestInt any
 )
@@ -29,8 +30,6 @@ func nonTreeBuilder() int {
 
 var gbvalt Tree = nil
 
-var just int8
-
 func main() {
 	gbvalt = &Leaf{}
 	var valt Tree = &Leaf{}
@@ -41,6 +40,7 @@ func main() {
 	valt = &NotTree{} // should make error
 	valt = NotTree{}  // should make error
 	valt = treeBuilder()
+	fmt.Printf("printing valt to suppres SA4006: %v\n", valt)
 	valt = nonTreeBuilder() // should make error
 
 	valt1 := treeBuilder()
@@ -67,9 +67,5 @@ func main() {
 	// should make error
 	switch valt.(type) {
 	case *Node:
-	}
-
-	if valt == nil {
-		fmt.Println("t is nil")
 	}
 }
