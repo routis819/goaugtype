@@ -1,4 +1,4 @@
-package main
+package analyzer
 
 import (
 	"errors"
@@ -9,17 +9,32 @@ import (
 	"os"
 	"strings"
 
-	"golang.org/x/tools/go/packages"
+	"golang.org/x/tools/go/analysis"
 )
+
+var Analyzer = &analysis.Analyzer{
+	Name: "goaugadt",
+	Doc:  "reports non-exhaustive type switches and invalid assignments on sum types",
+	Run:  run,
+}
+
+func run(pass *analysis.Pass) (interface{}, error) {
+	col, pkgAdtDecl := collectInfo(pass)
+	// TODO: handle errors from collectInfo
+
+	errs := check(pass.TypesInfo, col, pkgAdtDecl)
+
+	for _, e := range errs {
+		pass.Reportf(e.pos, e.err.Error())
+	}
+
+	return nil, nil
+}
 
 type augtError struct {
 	err error
 	pos token.Pos
 }
-
-const pkgLoadMode = packages.NeedTypes |
-	packages.NeedSyntax |
-	packages.NeedTypesInfo
 
 type goAugAdtDecl struct {
 	sumtype   string
@@ -223,17 +238,23 @@ func getTypeByName(tinfo *types.Info, n string) types.Object {
 }
 
 func checkAssign(tinfo *types.Info, col collected, evdecl []evGoAugAdtDecl) []augtError {
-	var err []augtError
+	var errs []augtError
 	for _, a := range col.assignStmts {
 		for i, lhs := range a.Lhs {
-			lhsident := lhs.(*ast.Ident)
+			lhsident, ok := lhs.(*ast.Ident)
+			if !ok {
+				continue
+			}
 			t := getTypeByName(tinfo, lhsident.Name)
+			if t == nil {
+				continue
+			}
 			sumt := findSumtypeByType(evdecl, t.Type())
 			if sumt.sumtype.Type == nil {
 				continue
 			}
 			if !isPermitted(tinfo, sumt, a.Rhs[i]) {
-				err = append(err, augtError{
+				errs = append(errs, augtError{
 					err: errors.New("invalid assigning"),
 					pos: a.TokPos,
 				})
@@ -243,46 +264,64 @@ func checkAssign(tinfo *types.Info, col collected, evdecl []evGoAugAdtDecl) []au
 	for _, a := range col.declassigns {
 		for i, n := range a.Names {
 			t := getTypeByName(tinfo, n.Name)
+			if t == nil {
+				continue
+			}
 			sumt := findSumtypeByType(evdecl, t.Type())
 			if sumt.sumtype.Type == nil {
 				continue
 			}
 			if !isPermitted(tinfo, sumt, a.Values[i]) {
-				err = append(err, augtError{
+				errs = append(errs, augtError{
 					err: errors.New("invalid declaration"),
 					pos: a.Pos(),
 				})
 			}
 		}
 	}
-	return err
+	return errs
 }
 
 func checkTypeSwitch(tinfo *types.Info, col collected, evdecl []evGoAugAdtDecl) []augtError {
-	var err []augtError
+	var errs []augtError
 	for _, stmt := range col.typeSwitchStmts {
-		exprstmt := stmt.Assign.(*ast.ExprStmt)
-		taexpr := exprstmt.X.(*ast.TypeAssertExpr)
-		chkident := taexpr.X.(*ast.Ident)
+		exprstmt, ok := stmt.Assign.(*ast.ExprStmt)
+		if !ok {
+			continue
+		}
+		taexpr, ok := exprstmt.X.(*ast.TypeAssertExpr)
+		if !ok {
+			continue
+		}
+		chkident, ok := taexpr.X.(*ast.Ident)
+		if !ok {
+			continue
+		}
 		t := getTypeByName(tinfo, chkident.Name)
+		if t == nil {
+			continue
+		}
 		sumt := findSumtypeByType(evdecl, t.Type())
 		if sumt.sumtype.Type == nil {
 			continue
 		}
 		if len(sumt.permitted) != len(stmt.Body.List) {
-			err = append(
-				err,
+			errs = append(
+				errs,
 				augtError{
 					err: errors.New("invalid type switch"),
 					pos: stmt.Pos(),
 				})
 		}
 		for _, bdstmt := range stmt.Body.List {
-			clause := bdstmt.(*ast.CaseClause)
+			clause, ok := bdstmt.(*ast.CaseClause)
+			if !ok {
+				continue
+			}
 			expr := clause.List[0]
 			if !isPermitted(tinfo, sumt, expr) {
-				err = append(
-					err,
+				errs = append(
+					errs,
 					augtError{
 						err: errors.New("invalid type switch"),
 						pos: stmt.Pos(),
@@ -290,26 +329,26 @@ func checkTypeSwitch(tinfo *types.Info, col collected, evdecl []evGoAugAdtDecl) 
 			}
 		}
 	}
-	return err
+	return errs
 }
 
 func check(tinfo *types.Info, col collected, evdecl []evGoAugAdtDecl) []augtError {
-	var err []augtError
+	var errs []augtError
 
 	asserr := checkAssign(tinfo, col, evdecl)
-	err = append(err, asserr...)
+	errs = append(errs, asserr...)
 
 	tserr := checkTypeSwitch(tinfo, col, evdecl)
-	err = append(err, tserr...)
+	errs = append(errs, tserr...)
 
-	return err
+	return errs
 }
 
-func collectInfo(pkg *packages.Package) (collected, []evGoAugAdtDecl) {
+func collectInfo(pass *analysis.Pass) (collected, []evGoAugAdtDecl) {
 	col := collected{}
 	var pkgAdtDecl []evGoAugAdtDecl
-	for _, astf := range pkg.Syntax {
-		cmtmap := ast.NewCommentMap(pkg.Fset, astf, astf.Comments)
+	for _, astf := range pass.Files {
+		cmtmap := ast.NewCommentMap(pass.Fset, astf, astf.Comments)
 		ispt := inspector{
 			src: source{cmtmap: cmtmap},
 			col: collected{},
@@ -317,19 +356,21 @@ func collectInfo(pkg *packages.Package) (collected, []evGoAugAdtDecl) {
 		ast.Inspect(astf, ispt.inspect)
 		adtDecls := make([]evGoAugAdtDecl, len(ispt.col.adtdecls))
 		for i, decl := range ispt.col.adtdecls {
-			sumt, err := types.Eval(pkg.Fset, pkg.Types, token.NoPos, decl.sumtype)
+			sumt, err := types.Eval(pass.Fset, pass.Pkg, token.NoPos, decl.sumtype)
 			if err != nil {
+				// TODO: create a proper error
 				fmt.Fprintln(os.Stderr, err.Error())
 				os.Exit(1)
 			}
 			permitted := make([]types.TypeAndValue, len(decl.permitted))
-			for i, prm := range decl.permitted {
-				prmt, err := types.Eval(pkg.Fset, pkg.Types, token.NoPos, prm)
+			for j, prm := range decl.permitted {
+				prmt, err := types.Eval(pass.Fset, pass.Pkg, token.NoPos, prm)
 				if err != nil {
+					// TODO: create a proper error
 					fmt.Fprintln(os.Stderr, err.Error())
 					os.Exit(1)
 				}
-				permitted[i] = prmt
+				permitted[j] = prmt
 			}
 			adtDecls[i] = evGoAugAdtDecl{sumtype: sumt, permitted: permitted}
 		}
@@ -341,29 +382,4 @@ func collectInfo(pkg *packages.Package) (collected, []evGoAugAdtDecl) {
 		pkgAdtDecl = append(pkgAdtDecl, adtDecls...)
 	}
 	return col, pkgAdtDecl
-}
-
-func inspect(pkg *packages.Package) []augtError {
-	col, pkgAdtDecl := collectInfo(pkg)
-	return check(pkg.TypesInfo, col, pkgAdtDecl)
-}
-
-func printErrs(pkg *packages.Package, errs []augtError) {
-	for _, e := range errs {
-		fmt.Fprintf(os.Stderr, "%s - %s\n",
-			pkg.Fset.Position(e.pos).String(),
-			e.err.Error(),
-		)
-	}
-}
-
-func checkPkg(pkg *packages.Package) {
-	errs := inspect(pkg)
-	printErrs(pkg, errs)
-}
-
-func checkPkgs(pkgs []*packages.Package) {
-	for _, pkg := range pkgs {
-		checkPkg(pkg)
-	}
 }
