@@ -1,10 +1,11 @@
-package main
+// Package adtsample provides code examples to verify the behavior of goaugadt.
+package adtsample
 
 import (
 	"fmt"
 )
 
-// Tree 는 트리구조를 나타내는 타입. ADT 테스트용으로 매우 적절함.
+// Tree represents a tree structure, which is very suitable for ADT testing.
 // goaugadt: *Leaf | *Node | nil
 type Tree any // type spec line comment
 
@@ -30,7 +31,7 @@ func nonTreeBuilder() int {
 
 var gbvalt Tree = nil
 
-func main() {
+func SimpleTest() {
 	gbvalt = &Leaf{}
 	var valt Tree = &Leaf{}
 	valt = Leaf{} // should make error

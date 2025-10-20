@@ -81,8 +81,7 @@ Based on the core logic implemented in `check.go`.
 
 `goaugtype` is currently a functional proof-of-concept. The goal is to evolve it into a standard linter for the Go community.
 
-  - [ ] **Migrate to the `go/analysis` framework:** This is the foundation for `golangci-lint` integration and IDE support.
-  - [ ] **Integrate with `golangci-lint`:** Make `goaugtype` available in the standard Go developer workflow.
+  - [X] **Migrate to the `go/analysis` framework:** This is the foundation for `golangci-lint` integration and IDE support.
   - [ ] **Improve Error Messages:** Provide more detailed error messages, such as specifying which case is missing in a non-exhaustive `switch`.
   - [ ] **Automate Testing:** Build a robust testing pipeline using the `analysistest` package.
 
