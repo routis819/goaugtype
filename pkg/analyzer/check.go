@@ -12,8 +12,13 @@ import (
 	"golang.org/x/tools/go/analysis"
 )
 
+const (
+	Directive              = "goaugtype"
+	DirectiveCommentPrefix = "// " + Directive + ":"
+)
+
 var Analyzer = &analysis.Analyzer{
-	Name: "goaugadt",
+	Name: "goaugtype",
 	Doc:  "reports non-exhaustive type switches and invalid assignments on sum types",
 	Run:  run,
 }
@@ -54,7 +59,7 @@ SEARCHING:
 	for _, cmtgrp := range cmtgrps {
 		for _, cmt := range cmtgrp.List {
 			pos = cmt.Pos()
-			if after, ok := strings.CutPrefix(cmt.Text, "// goaugadt:"); ok {
+			if after, ok := strings.CutPrefix(cmt.Text, DirectiveCommentPrefix); ok {
 				adtDeclLine = after
 
 				break SEARCHING
@@ -99,13 +104,13 @@ func analysisTypeSpec(tspc *ast.TypeSpec) (string, error) {
 	switch v := tspc.Type.(type) {
 	case *ast.Ident:
 		if v.Name != "any" {
-			return "", fmt.Errorf("goaugadt variable should be any or interface{}, pos - %v", tspc.Pos())
+			return "", fmt.Errorf("goaugtype variable should be any or interface{}, pos - %v", tspc.Pos())
 		}
 
 		return tspc.Name.Name, nil
 	case *ast.InterfaceType:
 		if len(v.Methods.List) != 0 {
-			return "", fmt.Errorf("goaugadt variable should be any or interface{}, pos - %v", tspc.Pos())
+			return "", fmt.Errorf("goaugtype variable should be any or interface{}, pos - %v", tspc.Pos())
 		}
 
 		return tspc.Name.Name, nil

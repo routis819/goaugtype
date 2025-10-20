@@ -23,13 +23,13 @@ go install github.com/routiz/goaugt/cmd/goaugadt@latest
 ## Usage
 
 1.  **Define Your Sum Type**
-    Create a type alias for `any` (or `interface{}`) and declare the set of permitted types in a `// goaugadt:` comment, separated by `|`.
+    Create a type alias for `any` (or `interface{}`) and declare the set of permitted types in a `// goaugtype:` comment, separated by `|`.
 
     Here is an example from the `test/adtsample/main.go` file.
 
     ```go
     // Tree represents a tree structure, a perfect use case for ADTs.
-    // goaugadt: *Leaf | *Node | nil
+    // goaugtype: *Leaf | *Node | nil
     type Tree interface{} // type spec line comment
 
     type Leaf struct{}
@@ -39,7 +39,7 @@ go install github.com/routiz/goaugt/cmd/goaugadt@latest
     Now, a variable of type `Tree` can only be assigned values of type `*Leaf`, `*Node`, or `nil`.
 
 2.  **Check Your Code**
-    `goaugadt` will now validate that `type switch` statements on the `Tree` type handle all permitted cases (`*Leaf`, `*Node`, and `nil`).
+    `goaugtype` will now validate that `type switch` statements on the `Tree` type handle all permitted cases (`*Leaf`, `*Node`, and `nil`).
 
     **✅ Correct Code (Exhaustive):**
 
@@ -53,7 +53,7 @@ go install github.com/routiz/goaugt/cmd/goaugadt@latest
     ```
 
     **❌ Incorrect Code (Non-Exhaustive):**
-    The `nil` case is missing. `goaugadt` will report an error for this `switch` statement.
+    The `nil` case is missing. `goaugtype` will report an error for this `switch` statement.
 
     ```go
     // An error will be reported
@@ -67,14 +67,14 @@ go install github.com/routiz/goaugt/cmd/goaugadt@latest
     To check all packages in your project, run the following command from the root directory:
 
     ```bash
-    goaugadt ./...
+    goaugtype ./...
     ```
 
 ## Current Features
 
 Based on the core logic implemented in `check.go`.
 
-  * **Exhaustiveness check** for `type switch` statements on sum types defined with `// goaugadt:`.
+  * **Exhaustiveness check** for `type switch` statements on sum types defined with `// goaugtype:`.
   * **Assignment and declaration check** to ensure only permitted types are assigned to a sum type variable.
 
 ## Roadmap

@@ -1,4 +1,4 @@
-// Package adtsample provides code examples to verify the behavior of goaugadt.
+// Package adtsample provides code examples to verify the behavior of goaugtype.
 package adtsample
 
 import (
@@ -6,7 +6,7 @@ import (
 )
 
 // Tree represents a tree structure, which is very suitable for ADT testing.
-// goaugadt: *Leaf | *Node | nil
+// goaugtype: *Leaf | *Node | nil
 type Tree any // type spec line comment
 
 type Leaf struct{}
@@ -17,7 +17,7 @@ type NotTree struct{}
 
 type (
 	// TestInt is a sum type of all int family.
-	// goaugadt: int8 | int16 | int32 | int64
+	// goaugtype: int8 | int16 | int32 | int64
 	TestInt any
 )
 
