@@ -233,16 +233,36 @@ func findSumtypeByType(decls []evGoAugADTDecl, t types.Type) evGoAugADTDecl {
 	return evGoAugADTDecl{}
 }
 
+// isPermitted checks if the expression's type is allowed in the sum type.
+// It leverages types.TypeAndValue for robust checking of nil and type identity.
 func isPermitted(tinfo *types.Info, decl evGoAugADTDecl, expr ast.Expr) bool {
-	t := tinfo.TypeOf(expr)
-	if t == nil {
+	tv, ok := tinfo.Types[expr]
+	if !ok {
 		return false
 	}
-	if types.Identical(t, decl.sumtype.Type) {
+
+	// Allow assigning the sum type itself (e.g. t1 = t2)
+	if tv.Type != nil && decl.sumtype.Type != nil && types.Identical(tv.Type, decl.sumtype.Type) {
 		return true
 	}
-	for i := range decl.permitted {
-		if types.Identical(t, decl.permitted[i].Type) {
+
+	// Iterate permitted types (which are also TypeAndValue)
+	for _, permitted := range decl.permitted {
+		// Case 1: Handle Nil
+		// Check if the expression is nil (tv.IsNil()) AND the permitted type is also nil.
+		// permitted.IsNil() handles "untyped nil" evaluated from directive.
+		if tv.IsNil() {
+			if permitted.IsNil() {
+				return true
+			}
+			// Fallback: sometimes "nil" evaluates to a Type with string "untyped nil" but IsNil() might vary based on context.
+			// Checking IsNil() is usually sufficient for `types.Eval("nil")`.
+			continue
+		}
+
+		// Case 2: Handle Types
+		// Use types.Identical for strict type equality instead of string comparison.
+		if tv.Type != nil && permitted.Type != nil && types.Identical(tv.Type, permitted.Type) {
 			return true
 		}
 	}
@@ -268,17 +288,18 @@ func checkAssign(tinfo *types.Info, col collected, evdecl []evGoAugADTDecl) []au
 			if !ok {
 				continue
 			}
-			t := getTypeByName(tinfo, lhsident.Name)
-			if t == nil {
+			// 수정됨: 이름 기반 검색 -> ObjectOf를 통한 정확한 객체 참조
+			tObj := tinfo.ObjectOf(lhsident)
+			if tObj == nil {
 				continue
 			}
-			sumt := findSumtypeByType(evdecl, t.Type())
+			sumt := findSumtypeByType(evdecl, tObj.Type())
 			if sumt.sumtype.Type == nil {
 				continue
 			}
 			if !isPermitted(tinfo, sumt, a.Rhs[i]) {
 				errs = append(errs, augtError{
-					err: errors.New("invalid assigning"),
+					err: errors.New("invalid assigning: type is not permitted"),
 					pos: a.TokPos,
 				})
 			}
@@ -286,17 +307,18 @@ func checkAssign(tinfo *types.Info, col collected, evdecl []evGoAugADTDecl) []au
 	}
 	for _, a := range col.declAssigns {
 		for i, n := range a.Names {
-			t := getTypeByName(tinfo, n.Name)
-			if t == nil {
+			// 수정됨: 이름 기반 검색 -> ObjectOf를 통한 정확한 객체 참조
+			tObj := tinfo.ObjectOf(n)
+			if tObj == nil {
 				continue
 			}
-			sumt := findSumtypeByType(evdecl, t.Type())
+			sumt := findSumtypeByType(evdecl, tObj.Type())
 			if sumt.sumtype.Type == nil {
 				continue
 			}
 			if !isPermitted(tinfo, sumt, a.Values[i]) {
 				errs = append(errs, augtError{
-					err: errors.New("invalid declaration"),
+					err: errors.New("invalid declaration: type is not permitted"),
 					pos: a.Pos(),
 				})
 			}
@@ -306,51 +328,143 @@ func checkAssign(tinfo *types.Info, col collected, evdecl []evGoAugADTDecl) []au
 	return errs
 }
 
+// getCanonicalName returns a fully qualified string representation of the type.
+// It ensures that package paths are always included (e.g., "github.com/pkg/adt.Leaf").
+func getCanonicalName(t types.Type) string {
+	return types.TypeString(t, func(p *types.Package) string {
+		return p.Path()
+	})
+}
+
 func checkTypeSwitch(tinfo *types.Info, col collected, evdecl []evGoAugADTDecl) []augtError {
 	var errs []augtError
+
 	for _, stmt := range col.typeSwitchStmts {
-		exprstmt, ok := stmt.Assign.(*ast.ExprStmt)
+		var targetExpr ast.Expr
+
+		// 1. Identify the target expression of the switch
+		switch t := stmt.Assign.(type) {
+		case *ast.AssignStmt: // switch v := x.(type)
+			if len(t.Rhs) > 0 {
+				if ta, ok := t.Rhs[0].(*ast.TypeAssertExpr); ok {
+					targetExpr = ta.X
+				}
+			}
+		case *ast.ExprStmt: // switch x.(type)
+			if ta, ok := t.X.(*ast.TypeAssertExpr); ok {
+				targetExpr = ta.X
+			}
+		}
+
+		if targetExpr == nil {
+			continue
+		}
+
+		// 2. Resolve type of the target expression
+		ident, ok := targetExpr.(*ast.Ident)
 		if !ok {
 			continue
 		}
-		taexpr, ok := exprstmt.X.(*ast.TypeAssertExpr)
-		if !ok {
+		// 수정됨: 이름 기반 검색 -> ObjectOf를 통한 정확한 객체 참조
+		tObj := tinfo.ObjectOf(ident)
+		if tObj == nil {
 			continue
 		}
-		chkident, ok := taexpr.X.(*ast.Ident)
-		if !ok {
-			continue
-		}
-		t := getTypeByName(tinfo, chkident.Name)
-		if t == nil {
-			continue
-		}
-		sumt := findSumtypeByType(evdecl, t.Type())
+		sumt := findSumtypeByType(evdecl, tObj.Type())
 		if sumt.sumtype.Type == nil {
 			continue
 		}
-		if len(sumt.permitted) != len(stmt.Body.List) {
-			errs = append(
-				errs,
-				augtError{
-					err: errors.New("invalid type switch"),
-					pos: stmt.Pos(),
-				})
+
+		// 3. Track unhandled types using a Set (map)
+		// We use getCanonicalName for safer map keys (includes package path).
+		unhandled := make(map[string]bool)
+		nilPermitted := false
+		for _, p := range sumt.permitted {
+			if p.IsNil() || (p.Type != nil && p.Type.String() == "untyped nil") {
+				nilPermitted = true
+			} else if p.Type != nil {
+				unhandled[getCanonicalName(p.Type)] = true
+			}
 		}
+
+		// 4. Iterate through all cases
 		for _, bdstmt := range stmt.Body.List {
 			clause, ok := bdstmt.(*ast.CaseClause)
 			if !ok {
 				continue
 			}
-			expr := clause.List[0]
-			if !isPermitted(tinfo, sumt, expr) {
-				errs = append(
-					errs,
-					augtError{
-						err: errors.New("invalid type switch"),
-						pos: stmt.Pos(),
-					})
+
+			// Check each type in the case list (case A, B:)
+			for _, expr := range clause.List {
+				tv, ok := tinfo.Types[expr]
+				if !ok {
+					continue
+				}
+
+				// Handle "case nil:" safely using TypeAndValue
+				if tv.IsNil() {
+					if !nilPermitted {
+						errs = append(
+							errs,
+							augtError{
+								err: errors.New("invalid type switch case: nil is not permitted"),
+								pos: expr.Pos(),
+							})
+					} else {
+						// nil is handled
+						nilPermitted = false // Mark as handled
+					}
+				} else {
+					// Handle normal types
+					if tv.Type != nil {
+						// Use canonical name for map lookup
+						tStr := getCanonicalName(tv.Type)
+						if unhandled[tStr] {
+							delete(unhandled, tStr)
+						}
+
+						// Double check validity using strict check
+						if !isPermitted(tinfo, sumt, expr) {
+							errs = append(errs, augtError{
+								err: fmt.Errorf("invalid type switch case: %s", tStr),
+								pos: expr.Pos(),
+							})
+						}
+					}
+				}
 			}
+		}
+
+		// 5. Check for exhaustiveness
+		// We need to know if 'nil' was handled.
+		nilWasHandled := false
+		for _, bdstmt := range stmt.Body.List {
+			clause, ok := bdstmt.(*ast.CaseClause)
+			if !ok {
+				continue
+			}
+			for _, expr := range clause.List {
+				if tv, ok := tinfo.Types[expr]; ok && tv.IsNil() {
+					nilWasHandled = true
+				}
+			}
+		}
+
+		var missing []string
+		for k := range unhandled {
+			missing = append(missing, k)
+		}
+		if nilPermitted && !nilWasHandled {
+			missing = append(missing, "nil")
+		}
+
+		if len(missing) > 0 {
+			errs = append(
+				errs,
+				augtError{
+					err: fmt.Errorf("non-exhaustive type switch. missing cases: %v", strings.Join(missing, ", ")),
+					pos: stmt.Pos(),
+				})
 		}
 	}
 
@@ -381,23 +495,27 @@ func collectInfo(pass *analysis.Pass) (collected, []evGoAugADTDecl) {
 		ast.Inspect(astf, ispt.inspect)
 		adtDecls := make([]evGoAugADTDecl, 0, len(ispt.col.adtDecls))
 		for _, decl := range ispt.col.adtDecls {
+			// FIXME(isr): try to provide valid token position. -> SOLVED
 			// Evaluate sumtype using the directive's position to resolve imports correctly.
 			sumt, err := types.Eval(pass.Fset, pass.Pkg, decl.pos, decl.sumtype)
 			if err != nil {
-				ispt.col.errs = append(ispt.col.errs, augtError{err: err, pos: decl.pos})
-
+				pass.Reportf(decl.pos, "goaugtype: failed to evaluate sum type: %v", err)
 				continue
 			}
-			permitted := make([]types.TypeAndValue, len(decl.permitted))
-			for j, prm := range decl.permitted {
+			permitted := make([]types.TypeAndValue, 0, len(decl.permitted))
+			hasError := false
+			for _, prm := range decl.permitted {
 				// Evaluate permitted types using the directive's position.
 				prmt, err := types.Eval(pass.Fset, pass.Pkg, decl.pos, prm)
 				if err != nil {
-					ispt.col.errs = append(ispt.col.errs, augtError{err: err, pos: decl.pos})
-
-					continue
+					pass.Reportf(decl.pos, "goaugtype: failed to evaluate permitted type '%s': %v", prm, err)
+					hasError = true
+					break
 				}
-				permitted[j] = prmt
+				permitted = append(permitted, prmt)
+			}
+			if hasError {
+				continue
 			}
 			adtDecls = append(adtDecls, evGoAugADTDecl{sumtype: sumt, permitted: permitted})
 		}
