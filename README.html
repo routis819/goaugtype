@@ -1,0 +1,127 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+	"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+
+<head>
+<title>README.html</title>
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8"/>
+
+</head>
+
+<body>
+
+<h1>goaugtype (goaugadt)</h1>
+
+<p><a href="https://www.google.com/search?q=https://pkg.go.dev/github.com/routiz/goaugt"></a>
+<a href="https://www.google.com/search?q=https://goreportcard.com/report/github.com/routiz/goaugt"></a>
+<a href="https://opensource.org/licenses/MIT"></a></p>
+
+<p><strong><code>goaugtype</code> is a static analysis tool that brings Sum Type-like features (also
+known as Algebraic Data Types or ADTs) to the Go language.</strong></p>
+
+<p>It prevents runtime bugs by ensuring that <code>switch x.(type)</code> statements are
+exhaustive. When you add a new type to a sum type definition, <code>goaugtype</code> flags any
+<code>switch</code> statements that have failed to handle the new case, turning a potential
+runtime panic into a compile-time error.</p>
+
+<h2>Why <code>goaugtype</code>?</h2>
+
+<p>Go does not natively support Sum Types or Sealed Classes. This makes it difficult to
+guarantee that all possible types are handled when working with tree-like data
+structures, such as in compilers, interpreters, or state machines.</p>
+
+<p><code>goaugtype</code> solves this by letting you explicitly define the set of types that an
+interface can be, using a simple comment directive. It then checks <code>switch</code>
+statements to ensure they cover all the defined types.</p>
+
+<h2>Installation</h2>
+
+<pre><code class="bash">go install github.com/routiz/goaugt/cmd/goaugadt@latest
+</code></pre>
+
+<h2>Usage</h2>
+
+<ol>
+<li><p><strong>Define Your Sum Type</strong> Create a type alias for <code>any</code> (or <code>interface{}</code>) and
+declare the set of permitted types in a <code>// goaugtype:</code> comment, separated by
+<code>|</code>.</p>
+
+<p>Here is an example from the <code>test/adtsample/main.go</code> file.</p>
+
+<pre><code class="go">// Tree represents a tree structure, a perfect use case for ADTs.
+// goaugtype: *Leaf | *Node | nil
+type Tree interface{} // type spec line comment
+
+type Leaf struct{}
+type Node struct{}
+</code></pre>
+
+<p>Now, a variable of type <code>Tree</code> can only be assigned values of type <code>*Leaf</code>,
+<code>*Node</code>, or <code>nil</code>.</p></li>
+<li><p><strong>Check Your Code</strong> <code>goaugtype</code> will now validate that <code>type switch</code> statements
+on the <code>Tree</code> type handle all permitted cases (<code>*Leaf</code>, <code>*Node</code>, and <code>nil</code>).</p>
+
+<p><strong>✅ Correct Code (Exhaustive):</strong></p>
+
+<pre><code class="go">// No error will be reported
+switch v := valt.(type) {
+case *Leaf:
+case *Node:
+case nil:
+}
+</code></pre>
+
+<p><strong>❌ Incorrect Code (Non-Exhaustive):</strong> The <code>nil</code> case is missing. <code>goaugtype</code>
+will report an error for this <code>switch</code> statement.</p>
+
+<pre><code class="go">// An error will be reported
+switch v := valt.(type) {
+case *Leaf:
+case *Node:
+}
+</code></pre></li>
+<li><p><strong>Run the Linter</strong> To check all packages in your project, run the following
+command from the root directory:</p>
+
+<pre><code class="bash">goaugtype ./...
+</code></pre></li>
+</ol>
+
+
+<h2>Current Features</h2>
+
+<p>Based on the core logic implemented in <code>check.go</code>.</p>
+
+<ul>
+<li><strong>Exhaustiveness check</strong> for <code>type switch</code> statements on sum types defined with
+<code>// goaugtype:</code>.</li>
+<li><strong>Assignment and declaration check</strong> to ensure only permitted types are assigned
+to a sum type variable.</li>
+</ul>
+
+
+<h2>Roadmap</h2>
+
+<p><code>goaugtype</code> is currently a functional proof-of-concept. The goal is to evolve it into
+a standard linter for the Go community.</p>
+
+<ul>
+<li>[X] <strong>Migrate to the <code>go/analysis</code> framework:</strong> This is the foundation for
+    <code>golangci-lint</code> integration and IDE support.</li>
+<li>[ ] <strong>Improve Error Messages:</strong> Provide more detailed error messages, such as
+    specifying which case is missing in a non-exhaustive <code>switch</code>.</li>
+<li>[ ] <strong>Automate Testing:</strong> Build a robust testing pipeline using the
+    <code>analysistest</code> package.</li>
+</ul>
+
+
+<blockquote><p><strong>Note:</strong> Generics are not currently supported.</p></blockquote>
+
+<h2>License</h2>
+
+<p>This project is licensed under the MIT License. See the <code>LICENSE</code> file for details.</p>
+
+</body>
+</html>

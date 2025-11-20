@@ -6,7 +6,6 @@ import (
 	"go/ast"
 	"go/token"
 	"go/types"
-	"os"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -23,15 +22,21 @@ var Analyzer = &analysis.Analyzer{
 	Run:  run,
 }
 
-func run(pass *analysis.Pass) (any, error) {
-	col, pkgAdtDecl := collectInfo(pass)
-	// TODO: handle errors from collectInfo
-
-	errs := check(pass.TypesInfo, col, pkgAdtDecl)
-
+func printErrs(errs []augtError, pass *analysis.Pass) {
 	for _, e := range errs {
 		pass.Reportf(e.pos, "%v", e.err)
 	}
+}
+
+func run(pass *analysis.Pass) (any, error) {
+	col, pkgAdtDecl := collectInfo(pass)
+	if len(col.errs) != 0 {
+		printErrs(col.errs, pass)
+
+		return nil, nil
+	}
+	errs := check(pass.TypesInfo, col, pkgAdtDecl)
+	printErrs(errs, pass)
 
 	return nil, nil
 }
@@ -44,40 +49,44 @@ type augtError struct {
 type goAugADTDecl struct {
 	sumtype   string
 	permitted []string
+	// pos is the position of the directive comment.
+	// It is required to evaluate imported types correctly within the file scope.
+	pos token.Pos
 }
 
+// evGoAugADTDecl is abbreviation of "evaluated goaugtype ADT Declaration"
 // goAugADTDecl -> (eval) -> evGoAugADTDecl
 type evGoAugADTDecl struct {
 	sumtype   types.TypeAndValue
 	permitted []types.TypeAndValue
 }
 
-func parseAdtDeclCmt(cmtgrps []*ast.CommentGroup) ([]string, error) {
+// parseAdtDeclCmt parses the comment group and returns the permitted types and the position of the directive.
+func parseAdtDeclCmt(cmtgrps []*ast.CommentGroup) ([]string, token.Pos, error) {
 	adtDeclLine := ""
 	var pos token.Pos
 SEARCHING:
 	for _, cmtgrp := range cmtgrps {
 		for _, cmt := range cmtgrp.List {
-			pos = cmt.Pos()
 			if after, ok := strings.CutPrefix(cmt.Text, DirectiveCommentPrefix); ok {
+				pos = cmt.Pos()
 				adtDeclLine = after
-
 				break SEARCHING
 			}
 		}
 	}
 	if adtDeclLine == "" {
-		return nil, nil
+		return nil, token.NoPos, nil
 	}
 	items := strings.Split(adtDeclLine, "|")
 	if len(items) <= 1 {
-		return nil, fmt.Errorf("invalid format, pos :%v", pos)
+		return nil, pos, fmt.Errorf("invalid format, pos :%v", pos)
 	}
 	for i := range items {
 		items[i] = strings.TrimSpace(items[i])
 	}
 
-	return items, nil
+	return items, pos, nil
 }
 
 func analysisTypeSpecWithCmt(cmtmap ast.CommentMap, tspc *ast.TypeSpec) ([]goAugADTDecl, error) {
@@ -85,7 +94,7 @@ func analysisTypeSpecWithCmt(cmtmap ast.CommentMap, tspc *ast.TypeSpec) ([]goAug
 	if !ok {
 		return nil, nil
 	}
-	permitted, err := parseAdtDeclCmt(cmt)
+	permitted, pos, err := parseAdtDeclCmt(cmt)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +106,8 @@ func analysisTypeSpecWithCmt(cmtmap ast.CommentMap, tspc *ast.TypeSpec) ([]goAug
 		return nil, err
 	}
 
-	return []goAugADTDecl{{sumtype: sumtype, permitted: permitted}}, nil
+	// Store the position to use for evaluation later
+	return []goAugADTDecl{{sumtype: sumtype, permitted: permitted, pos: pos}}, nil
 }
 
 func analysisTypeSpec(tspc *ast.TypeSpec) (string, error) {
@@ -137,7 +147,7 @@ func analysisTypeDeclWithCmt(cmtmap ast.CommentMap, v *ast.GenDecl) ([]goAugADTD
 	if !ok {
 		return nil, nil
 	}
-	permitted, err := parseAdtDeclCmt(cmt)
+	permitted, pos, err := parseAdtDeclCmt(cmt)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +159,7 @@ func analysisTypeDeclWithCmt(cmtmap ast.CommentMap, v *ast.GenDecl) ([]goAugADTD
 		return nil, err
 	}
 
-	return []goAugADTDecl{{sumtype: sumtype, permitted: permitted}}, nil
+	return []goAugADTDecl{{sumtype: sumtype, permitted: permitted, pos: pos}}, nil
 
 }
 
@@ -158,11 +168,13 @@ type source struct {
 }
 
 type collected struct {
-	adtDecls        []goAugADTDecl
+	adtDecls []goAugADTDecl
+
 	declAssigns     []*ast.ValueSpec
 	assignStmts     []*ast.AssignStmt
 	typeSwitchStmts []*ast.TypeSwitchStmt
-	e               []error
+
+	errs []augtError
 }
 
 type inspector struct {
@@ -182,7 +194,7 @@ func (ispt *inspector) inspect(n ast.Node) bool {
 		case token.TYPE:
 			d, err := analysisTypeDeclWithCmt(ispt.src.cmtmap, v)
 			if err != nil {
-				ispt.col.e = append(ispt.col.e, err)
+				ispt.col.errs = append(ispt.col.errs, augtError{err: err, pos: v.Pos()})
 
 				break
 			}
@@ -197,7 +209,7 @@ func (ispt *inspector) inspect(n ast.Node) bool {
 	case *ast.TypeSpec:
 		d, err := analysisTypeSpecWithCmt(ispt.src.cmtmap, v)
 		if err != nil {
-			ispt.col.e = append(ispt.col.e, err)
+			ispt.col.errs = append(ispt.col.errs, augtError{err: err, pos: v.Pos()})
 
 			break
 		}
@@ -367,32 +379,33 @@ func collectInfo(pass *analysis.Pass) (collected, []evGoAugADTDecl) {
 			col: collected{},
 		}
 		ast.Inspect(astf, ispt.inspect)
-		adtDecls := make([]evGoAugADTDecl, len(ispt.col.adtDecls))
-		for i, decl := range ispt.col.adtDecls {
-			// FIXME(isr): try to provide valid token position.
-			sumt, err := types.Eval(pass.Fset, pass.Pkg, token.NoPos, decl.sumtype)
+		adtDecls := make([]evGoAugADTDecl, 0, len(ispt.col.adtDecls))
+		for _, decl := range ispt.col.adtDecls {
+			// Evaluate sumtype using the directive's position to resolve imports correctly.
+			sumt, err := types.Eval(pass.Fset, pass.Pkg, decl.pos, decl.sumtype)
 			if err != nil {
-				// TODO: create a proper error
-				fmt.Fprintln(os.Stderr, err.Error())
-				os.Exit(1)
+				ispt.col.errs = append(ispt.col.errs, augtError{err: err, pos: decl.pos})
+
+				continue
 			}
 			permitted := make([]types.TypeAndValue, len(decl.permitted))
 			for j, prm := range decl.permitted {
-				prmt, err := types.Eval(pass.Fset, pass.Pkg, token.NoPos, prm)
+				// Evaluate permitted types using the directive's position.
+				prmt, err := types.Eval(pass.Fset, pass.Pkg, decl.pos, prm)
 				if err != nil {
-					// TODO: create a proper error
-					fmt.Fprintln(os.Stderr, err.Error())
-					os.Exit(1)
+					ispt.col.errs = append(ispt.col.errs, augtError{err: err, pos: decl.pos})
+
+					continue
 				}
 				permitted[j] = prmt
 			}
-			adtDecls[i] = evGoAugADTDecl{sumtype: sumt, permitted: permitted}
+			adtDecls = append(adtDecls, evGoAugADTDecl{sumtype: sumt, permitted: permitted})
 		}
 		col.adtDecls = append(col.adtDecls, ispt.col.adtDecls...)
 		col.declAssigns = append(col.declAssigns, ispt.col.declAssigns...)
 		col.assignStmts = append(col.assignStmts, ispt.col.assignStmts...)
 		col.typeSwitchStmts = append(col.typeSwitchStmts, ispt.col.typeSwitchStmts...)
-		col.e = append(col.e, ispt.col.e...)
+		col.errs = append(col.errs, ispt.col.errs...)
 		pkgADTDecl = append(pkgADTDecl, adtDecls...)
 	}
 
