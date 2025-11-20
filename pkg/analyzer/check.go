@@ -225,7 +225,7 @@ func (ispt *inspector) inspect(n ast.Node) bool {
 
 func findSumtypeByType(decls []evGoAugADTDecl, t types.Type) evGoAugADTDecl {
 	for i := range decls {
-		if decls[i].sumtype.Type.String() == t.String() {
+		if types.Identical(t, decls[i].sumtype.Type) {
 			return decls[i]
 		}
 	}
@@ -233,16 +233,16 @@ func findSumtypeByType(decls []evGoAugADTDecl, t types.Type) evGoAugADTDecl {
 	return evGoAugADTDecl{}
 }
 
-func isPermitted(tinfo *types.Info, sumtype evGoAugADTDecl, expr ast.Expr) bool {
+func isPermitted(tinfo *types.Info, decl evGoAugADTDecl, expr ast.Expr) bool {
 	t := tinfo.TypeOf(expr)
 	if t == nil {
 		return false
 	}
-	if t.String() == sumtype.sumtype.Type.String() {
+	if types.Identical(t, decl.sumtype.Type) {
 		return true
 	}
-	for i := range sumtype.permitted {
-		if sumtype.permitted[i].Type.String() == t.String() {
+	for i := range decl.permitted {
+		if types.Identical(t, decl.permitted[i].Type) {
 			return true
 		}
 	}
