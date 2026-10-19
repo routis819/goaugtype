@@ -1,0 +1,18 @@
+{
+  "upstream_repo": "golang/go",
+  "base_revision": "go1.26.7",
+  "tracked_files": [
+    "src/go/types/typeset.go",
+    "src/go/types/termlist.go",
+    "src/go/types/typeterm.go",
+    "src/go/types/union.go",
+    "src/go/types/instantiate.go"
+  ],
+  "file_hashes": {
+    "src/go/types/instantiate.go": "d35163bf5556124093350607909ecf9c980526c902aadde560538f2545459c21",
+    "src/go/types/termlist.go": "51dd014d78701b1454b1eb88f04739d6ae3a0cebdcd5c1e6b197c295c5acfc79",
+    "src/go/types/typeset.go": "d506dd9257a59375455bd58968309bbfa933844b0d64587d0debfd52066da46f",
+    "src/go/types/typeterm.go": "2ef47325fd1829ff8243f17afc8e7039d4e478f07ea5c10c15e5ea1db9cb8ae3",
+    "src/go/types/union.go": "2ab438af5ee222c688c71010c55ba4319d4b2d6d0cd824a8f66c404b5ee3e019"
+  }
+}
