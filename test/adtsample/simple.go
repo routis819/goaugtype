@@ -6,7 +6,7 @@ import (
 )
 
 // Tree represents a tree structure, which is very suitable for ADT testing.
-// goaugtype: *Leaf | *Node | nil
+// goaugtype: *Leaf | *Node
 type Tree any // type spec line comment
 
 type Leaf struct{}
