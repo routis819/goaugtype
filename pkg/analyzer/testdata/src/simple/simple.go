@@ -6,8 +6,8 @@ import (
 )
 
 // Tree represents a tree structure, which is very suitable for ADT testing.
-// goaugtype: *Leaf | *Node | nil
-type Tree any // type spec line comment
+// goaugtype: *Leaf | *Node
+type Tree any // want Tree:"SumTypeFact\\(\\*simple.Leaf \\| \\*simple.Node\\)"
 
 type Leaf struct{}
 
@@ -18,7 +18,7 @@ type NotTree struct{}
 type (
 	// TestInt is a sum type of all int family.
 	// goaugtype: int8 | int16 | int32 | int64
-	TestInt any
+	TestInt any // want TestInt:"SumTypeFact\\(int8 \\| int16 \\| int32 \\| int64\\)"
 )
 
 func treeBuilder() Tree {

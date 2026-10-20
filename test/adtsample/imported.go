@@ -4,7 +4,7 @@ import (
 	"strings"
 )
 
-// goaugtype: *strings.Reader | nil
+// goaugtype: *strings.Reader
 type ImportedTester any
 
 func noop(v any) {}
