@@ -8,5 +8,5 @@ import (
 )
 
 func TestAnalyzer(t *testing.T) {
-	analysistest.Run(t, analysistest.TestData(), analyzer.Analyzer, "simple", "imported")
+	analysistest.Run(t, analysistest.TestData(), analyzer.Analyzer, "simple", "imported", "typeset", "assign", "assignctx", "pkga", "pkgb")
 }
