@@ -1,0 +1,52 @@
+direction: down
+
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 200
+  }
+}
+
+decl: "Declaration Site: BuildRegistry & ValidateTerms()" {
+  raw: "Directive: // goaugtype: T1 | T2 | ..."
+  syntax: "Syntax Guard\nReject '~T' & 'nil'"
+  flatten: "DFS Flatten Nested Sum Types\nPartition into ConcreteTerms (C) & IfaceTerms (I)"
+  methods: "General Interface Check (#9)\nIf SelfIface.NumMethods() > 0:\nVerify ∀t ∈ C ∪ I: Implements(t, SelfIface)"
+
+  disjoint: "Pairwise Inclusion Disjointness Invariant" {
+    rule1: "1. Concrete Disjointness\n∀i≠j: !Identical(C_i, C_j)\n(Reject 'int | int')"
+    rule2: "2. Non-Empty Interface\n∀I_k ∈ I: I_k.NumMethods() > 0\n(Reject 'any' / 'interface{}')"
+    rule3: "3. Concrete vs Interface\n∀C_i ∈ C, ∀I_k ∈ I: !Implements(C_i, I_k)\n(Reject '*MyError | error')"
+    rule4: "4. Interface vs Interface\n∀k≠m: !Implements(I_k, I_m) && !Implements(I_m, I_k)\n(Reject 'io.ReadWriter | io.Reader')"
+
+    rule1 -> rule2 -> rule3 -> rule4
+  }
+
+  raw -> syntax -> flatten -> methods -> disjoint
+}
+
+switch_sm: "Use Site: checkTypeSwitch State Machine" {
+  init: "Initialize State\nunhandled = C ∪ I\nseenConcrete = ∅, seenIfaces = ∅\nnilHandled = false, defaultClause = nil"
+  clause: "Inspect Clause Expression T"
+
+  is_default: "default: branch\nRecord defaultClause\n(Does NOT satisfy unhandled)"
+  is_nil: "case nil: branch\nIf nilHandled -> Error (Duplicate nil)\nElse -> nilHandled = true"
+  is_nested: "Nested SumType Check\nIf reg.Lookup(T) != nil -> Error\n(Erased to interface{} at runtime)"
+  is_permitted: "Membership Check\nIf !S.Includes(T) -> Error (Invalid case)"
+  is_shadowed: "Shadowing Check\nIf T in seenConcrete/seenIfaces OR\n∃I_prev ∈ seenIfaces: Implements(T, I_prev)\n-> Error (Shadowed / Unreachable case)"
+  narrow_or_cover: "Valid Case Update\nRecord T in seenConcrete / seenIfaces\nDelete T from unhandled\n(Narrowing '*MyError' before 'error' is valid\nand keeps 'error' in unhandled)"
+  final: "Final Exhaustiveness & Default Check\n1. If unhandled != ∅ or !nilHandled -> Error (Missing cases)\n2. Else if defaultClause != nil -> Error (Redundant default)"
+
+  init -> clause
+  clause -> is_default: "default:"
+  clause -> is_nil: "case nil:"
+  clause -> is_nested: "case T:"
+  is_nested -> is_permitted: "T is leaf / subtype"
+  is_permitted -> is_shadowed: "T ∈ S"
+  is_shadowed -> narrow_or_cover: "Not shadowed"
+  is_default -> final
+  is_nil -> final
+  narrow_or_cover -> final
+}
+
+decl.disjoint -> switch_sm.init: "Valid SumTypeSet S"
