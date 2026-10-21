@@ -166,6 +166,7 @@ type collected struct {
 	funcLits        []*ast.FuncLit
 	compositeLits   []*ast.CompositeLit
 	sendStmts       []*ast.SendStmt
+	typeAssertExprs []*ast.TypeAssertExpr
 
 	errs []augtError
 }
@@ -219,6 +220,10 @@ func (ispt *inspector) inspect(n ast.Node) bool {
 		ispt.col.adtDecls = append(ispt.col.adtDecls, d...)
 	case *ast.TypeSwitchStmt:
 		ispt.col.typeSwitchStmts = append(ispt.col.typeSwitchStmts, v)
+	case *ast.TypeAssertExpr:
+		if v.Type != nil {
+			ispt.col.typeAssertExprs = append(ispt.col.typeAssertExprs, v)
+		}
 	default:
 		break
 	}
@@ -365,12 +370,21 @@ func checkTypeSwitch(tinfo *types.Info, col collected, reg *Registry) []augtErro
 			unhandled[getCanonicalName(it)] = true
 		}
 
+		var seenConcrete []types.Type
+		var seenIfaces []types.Type
 		nilHandled := false
+		var defaultClause *ast.CaseClause
 
 		// 4. Iterate through all cases
 		for _, bdstmt := range stmt.Body.List {
 			clause, ok := bdstmt.(*ast.CaseClause)
 			if !ok {
+				continue
+			}
+
+			// default clause
+			if len(clause.List) == 0 {
+				defaultClause = clause
 				continue
 			}
 
@@ -382,23 +396,51 @@ func checkTypeSwitch(tinfo *types.Info, col collected, reg *Registry) []augtErro
 				}
 
 				if tv.IsNil() || (tv.Type != nil && types.Identical(tv.Type, types.Typ[types.UntypedNil])) {
+					if nilHandled {
+						errs = append(errs, augtError{
+							err: fmt.Errorf("duplicate or shadowed type switch case: nil"),
+							pos: expr.Pos(),
+						})
+					}
 					nilHandled = true
-				} else if tv.Type != nil {
+					continue
+				}
+
+				if tv.Type != nil {
 					if !sumt.IsPermittedCaseType(reg, tv.Type) {
 						errs = append(errs, augtError{
 							err: fmt.Errorf("invalid type switch case: %s", getCanonicalName(tv.Type)),
 							pos: expr.Pos(),
 						})
+						continue
 					}
 
-					if subSum := reg.Lookup(tv.Type); subSum != nil {
-						for _, ct := range subSum.ConcreteTerms {
-							delete(unhandled, getCanonicalName(ct))
+					// Check shadowing against previously seen cases
+					if containsType(seenConcrete, tv.Type) || containsType(seenIfaces, tv.Type) {
+						errs = append(errs, augtError{
+							err: fmt.Errorf("shadowed type switch case: %s", getCanonicalName(tv.Type)),
+							pos: expr.Pos(),
+						})
+						continue
+					}
+
+					var coveredBy types.Type
+					for _, prevIface := range seenIfaces {
+						if iface, ok := prevIface.Underlying().(*types.Interface); ok && types.Implements(tv.Type, iface) {
+							coveredBy = prevIface
+							break
 						}
-						for _, it := range subSum.IfaceTerms {
-							delete(unhandled, getCanonicalName(it))
-						}
-					} else if types.IsInterface(tv.Type) {
+					}
+					if coveredBy != nil {
+						errs = append(errs, augtError{
+							err: fmt.Errorf("shadowed type switch case: %s is already covered by %s", getCanonicalName(tv.Type), getCanonicalName(coveredBy)),
+							pos: expr.Pos(),
+						})
+						continue
+					}
+
+					if types.IsInterface(tv.Type) {
+						seenIfaces = append(seenIfaces, tv.Type)
 						delete(unhandled, getCanonicalName(tv.Type))
 						if iface, ok := tv.Type.Underlying().(*types.Interface); ok {
 							for _, ct := range sumt.ConcreteTerms {
@@ -408,6 +450,7 @@ func checkTypeSwitch(tinfo *types.Info, col collected, reg *Registry) []augtErro
 							}
 						}
 					} else {
+						seenConcrete = append(seenConcrete, tv.Type)
 						delete(unhandled, getCanonicalName(tv.Type))
 					}
 				}
@@ -441,6 +484,13 @@ func checkTypeSwitch(tinfo *types.Info, col collected, reg *Registry) []augtErro
 				augtError{
 					err: fmt.Errorf("non-exhaustive type switch. missing cases: %v", strings.Join(missing, ", ")),
 					pos: stmt.Pos(),
+				})
+		} else if defaultClause != nil {
+			errs = append(
+				errs,
+				augtError{
+					err: fmt.Errorf("redundant default case in exhaustive type switch"),
+					pos: defaultClause.Pos(),
 				})
 		}
 	}
@@ -747,6 +797,40 @@ func checkSend(tinfo *types.Info, col collected, reg *Registry) []augtError {
 	return errs
 }
 
+func checkTypeAssert(tinfo *types.Info, col collected, reg *Registry) []augtError {
+	var errs []augtError
+	for _, ta := range col.typeAssertExprs {
+		srcType := tinfo.TypeOf(ta.X)
+		if srcType == nil {
+			continue
+		}
+		assertedType := tinfo.TypeOf(ta.Type)
+		if assertedType == nil {
+			continue
+		}
+
+		if targetSum := reg.Lookup(assertedType); targetSum != nil {
+			if !targetSum.IsPermittedValue(tinfo, reg, ta.X) {
+				errs = append(errs, augtError{
+					err: errors.New("invalid type assertion to sum type: type is not permitted"),
+					pos: ta.Pos(),
+				})
+			}
+			continue
+		}
+
+		if srcSum := reg.Lookup(srcType); srcSum != nil {
+			if !srcSum.IsPermittedCaseType(reg, assertedType) {
+				errs = append(errs, augtError{
+					err: errors.New("invalid type assertion from sum type: type is not permitted"),
+					pos: ta.Pos(),
+				})
+			}
+		}
+	}
+	return errs
+}
+
 func check(tinfo *types.Info, col collected, reg *Registry) []augtError {
 	var errs []augtError
 
@@ -771,6 +855,9 @@ func check(tinfo *types.Info, col collected, reg *Registry) []augtError {
 	senderr := checkSend(tinfo, col, reg)
 	errs = append(errs, senderr...)
 
+	taerr := checkTypeAssert(tinfo, col, reg)
+	errs = append(errs, taerr...)
+
 	return errs
 }
 
@@ -792,6 +879,7 @@ func collectInfo(pass *analysis.Pass) (collected, *Registry) {
 		col.funcLits = append(col.funcLits, ispt.col.funcLits...)
 		col.compositeLits = append(col.compositeLits, ispt.col.compositeLits...)
 		col.sendStmts = append(col.sendStmts, ispt.col.sendStmts...)
+		col.typeAssertExprs = append(col.typeAssertExprs, ispt.col.typeAssertExprs...)
 		col.errs = append(col.errs, ispt.col.errs...)
 	}
 

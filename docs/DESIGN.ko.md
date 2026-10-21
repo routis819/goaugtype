@@ -11,10 +11,11 @@
    - `#57644`는 현재 제네릭 타입 제약(Type parameter constraint)에만 허용되는 타입 유니온(`T1 | T2`)을 **일반 인터페이스(Ordinary/General Interface)**에도 허용하자는 제안입니다.
    - 현행 Go 컴파일러는 변수 타입으로 사용되는 일반 인터페이스 내에 `T1 | T2`를 직접 작성하면 컴파일 에러(`interface contains type constraints`)를 발생시킵니다.
    - 따라서 `goaugtype`은 표준 Go 문법과 호환되는 인터페이스 선언(`type I any` 또는 `type I interface { ... }`) 위에 `// goaugtype: T1 | T2` 주석 지시자를 부여하여, **`#57644`의 타입 셋(Type Set) 규칙을 있는 그대로 정적 분석기로 에뮬레이션**합니다.
-2. **타입 셋(Type Set) 기반의 일관된 시맨틱**:
+2. **타입 셋(Type Set) 기반의 일관된 시맨틱 및 서로소 직교성(Disjoint Orthogonality)**:
    - 합타입을 별도의 특수한 문법 체계나 커스텀 `nil` 어노테이션으로 정의하지 않고, Go 1.18+ 스펙의 **인터페이스 타입 셋(Type Set)과 구현(Implements / Assignability) 규칙**의 자연스러운 확장으로 정의합니다.
-3. **정적 완전성(Exhaustiveness) 보장**:
-   - `#57644` 언어 제안 자체는 하위 호환성 문제로 컴파일러 차원의 `type switch` 완전성 강제를 유보했으나, `goaugtype`은 린터로서 `type switch`가 타입 셋의 모든 원소와 인터페이스의 제로값(`nil`)을 빠짐없이 처리했는지 엄격하게 검증합니다.
+   - 여기에 더해 평탄화(Flattening)된 유니온 항들 간의 **선언부 서로소(Pairwise Disjointness)**를 강제함으로써, 합타입에 새로운 타입을 추가했을 때 상위 인터페이스에 흡수되어 기존 `type switch` 문이 조용히 통과해 버리는 사각지대를 원천 차단합니다.
+3. **정적 완전성(Exhaustiveness) 보장 및 타입 소거(Type Erasure) 안전성**:
+   - `#57644` 언어 제안 자체는 하위 호환성 문제로 컴파일러 차원의 `type switch` 완전성 강제를 유보했으나, `goaugtype`은 린터로서 `type switch`가 평탄화된 모든 리프 원소와 인터페이스의 제로값(`nil`)을 빠짐없이 처리했는지 검증하고, 런타임 타입 소거로 인한 분기 가리움(Shadowing)과 잉여 `default:`를 차단합니다.
 
 ---
 
@@ -51,7 +52,7 @@ type Tree interface {
   - Go 표준 Assignability 규칙에 따라, 비타입 상수(예: `10`, `"hello"`)가 인터페이스에 대입될 때는 해당 상수의 기본 타입(Default Type: `int`, `float64`, `string`, `bool` 등)으로 평가된 후 타입 셋 포함 여부를 판정합니다.
   - 예: `// goaugtype: int8 | int16`인 `SmallInt`에 비타입 상수 `10`(기본 타입 `int`)을 대입하면 `int`가 타입 셋에 없으므로 거부됩니다(`int8(10)`으로 명시적 변환 필요).
 
-### 2.3. 인터페이스 항 및 중첩 합타입(Nested/Composed Sum Types)
+### 2.3. 인터페이스 항, 중첩 합타입, 그리고 선언부 서로소 원칙(Disjoint Union Invariant)
 > **#57644 원문**: *"Embedding a union in an interface affects the interface's type set."*
 
 Go의 인터페이스 유니온에서 각 항(Term)은 구체 타입일 수도 있고, 다른 인터페이스나 또 다른 합타입일 수도 있습니다.
@@ -59,9 +60,15 @@ Go의 인터페이스 유니온에서 각 항(Term)은 구체 타입일 수도 �
 1. **중첩 합타입의 평탄화(Type Set Flattening) 및 부분집합 대입**:
    - 합타입 $I_2$의 허용 목록에 다른 합타입 $I_1$이 포함되면(`// goaugtype: I1 | float64`), $I_2$의 유효 타입 셋은 $\text{TypeSet}(I_1) \cup \{\text{float64}\}$로 평탄화됩니다.
    - 합타입 $S$의 값을 합타입 $T$에 대입할 때, $S$와 $T$가 동일한 타입(`types.Identical`)이 아니더라도 **$\text{TypeSet}(S) \subseteq \text{TypeSet}(T)$이면 대입을 허용**합니다.
-   - `switch x.(type)`에서 `case I1:` 분기를 작성하면 $\text{TypeSet}(I_1)$에 속한 모든 타입이 처리된 것으로 인정합니다.
 2. **일반 인터페이스 항 지원 (Issue #5 연계)**:
    - 허용 목록에 합타입이 아닌 일반 인터페이스(예: `error`, `io.Reader`)가 포함된 경우, 대입되는 값의 타입 $V$가 해당 인터페이스를 구현(`types.Implements(V, TermInterface)`)하면 유효한 대입으로 판정합니다.
+3. **선언부 서로소 불변식 (Disjoint Union Invariant — No Overlapping Terms)**:
+   - Haskell이나 Rust의 Tagged Union과 동일한 수준의 엄격한 완전성 검사(합타입에 새로운 항을 추가하면 기존 `type switch` 문에서 반드시 미처리 케이스 에러가 발생함)를 보장하기 위해, 평탄화를 거친 최종 리프 항들 사이에 **쌍별 포함 서로소(Pairwise Inclusion Disjointness)**를 강제합니다:
+     1. **구체 타입 중복 금지**: 평탄화된 두 구체 타입 항 $C_1, C_2$가 `types.Identical(C_1, C_2)`이면 중복 구체 타입 에러를 보고합니다.
+     2. **일반 인터페이스 중첩 및 빈 인터페이스 금지**:
+        - 모든 일반(비-합타입) 인터페이스 항 $I$는 최소 1개 이상의 메서드를 선언해야 합니다(`I.NumMethods() > 0`; `any` / `interface{}`는 거부됨).
+        - 구체 타입 항 $C$가 같은 합타입 내의 일반 인터페이스 항 $I$를 구현하면(`types.Implements(C, I)`) 선언 에러를 보고합니다. 예를 들어 `// goaugtype: *MyError | error`는 `*MyError`가 이미 `error`의 부분집합이므로 선언 시점에 거부됩니다.
+        - 두 일반 인터페이스 항 $I_1, I_2$가 포함 관계(`types.Implements(I_1, I_2)` 또는 `types.Implements(I_2, I_1)`)를 가지면 선언 에러를 보고합니다.
 
 ### 2.4. 순수 #57644 모델의 제로값(`nil`) 시맨틱
 > **#57644 원문**: *"In particular, the zero value of an interface type with an embedded union would be `nil`, just as for any interface type. So this is a form of sum type in which there is always another possible option, namely `nil`."*
@@ -71,14 +78,14 @@ Go의 인터페이스 유니온에서 각 항(Term)은 구체 타입일 수도 �
 1. **모든 합타입의 제로값은 항상 `nil`**:
    - 모든 합타입 변수의 제로값은 `nil`입니다. 따라서 초기값 없는 변수 선언(`var x Tree`), 복합 리터럴의 제로 초기화 필드, 명시적인 `nil` 대입(`x = nil`)은 모든 합타입에서 **항상 유효**합니다.
 2. **`type switch`에서 `case nil:` 항상 필수**:
-   - 모든 합타입 인터페이스에는 항상 `nil`이라는 선택지가 존재하므로, 합타입에 대한 모든 `switch x.(type)` 문은 유니온 타입 항들과 더불어 **`case nil:`을 항상 명시적으로 처리**해야 완전한 것으로 인정합니다(분석기 옵션으로 `default:`를 허용하는 경우 제외).
+   - 모든 합타입 인터페이스에는 항상 `nil`이라는 선택지가 존재하므로, 합타입에 대한 모든 `switch x.(type)` 문은 유니온 타입 항들과 더불어 **`case nil:`을 항상 명시적으로 처리**해야 완전한 것으로 인정합니다.
 3. **Typed `nil`과 Untyped `nil`의 구분**:
    - `var leaf *Leaf = nil; var t Tree = leaf`에서 `t`는 인터페이스로서 `nil`이 아니라 동적 타입 `*Leaf`를 가진 값(`(*Leaf)(nil)`)입니다. 이는 `case *Leaf:`로 분기되며, 타입 셋 차원에서는 `*Leaf`로 취급됩니다.
 
-### 2.5. 완전한 대입/변환 검증 범위 (Complete Assignability Verification)
+### 2.5. 완전한 대입/변환/단언 검증 범위 (8 Paths)
 > **#57644 원문**: *"As always, a variable of interface type may store a value of any type that is in its type set... Inversely, a variable of interface type may not store a value of any type that is not in its type set."*
 
-`#57644`에서 타입 셋에 속하지 않는(그리고 `nil`이 아닌) 값은 어떠한 경로로도 해당 인터페이스 타입의 값으로 저장되거나 변환될 수 없습니다. 따라서 `goaugtype`은 단순 식별자 대입(`ident = expr`)을 넘어 Go 스펙상 **Assignability 및 Type Conversion이 발생하는 모든 AST 지점**을 검사해야 합니다:
+`#57644`에서 타입 셋에 속하지 않는(그리고 `nil`이 아닌) 값은 어떠한 경로로도 해당 인터페이스 타입의 값으로 저장·변환·단언될 수 없습니다. 따라서 `goaugtype`은 Go 스펙상 **Assignability, Type Conversion, Type Assertion이 발생하는 8가지 AST 지점을 전수 검사**합니다:
 
 | 번호 | 검사 지점 (AST Node) | 예시 코드 | 기존 동작 | 목표 동작 |
 | :--- | :--- | :--- | :--- | :--- |
@@ -89,16 +96,21 @@ Go의 인터페이스 유니온에서 각 항(Term)은 구체 타입일 수도 �
 | 5 | 함수 호출 인자 (`*ast.CallExpr`) | `takeTree(NotTree{})` | 미검사 | 호출 대상 함수의 파라미터 타입(가변 인자 포함)이 합타입이면 인자 표현식 검사 |
 | 6 | 복합 리터럴 (`*ast.CompositeLit`) | `[]Tree{NotTree{}}`, `MyStruct{TreeField: NotTree{}}` | 미검사 | 슬라이스/배열/맵/구조체 리터럴의 각 요소가 대입되는 대상 타입이 합타입이면 검사 |
 | 7 | 채널 전송 (`*ast.SendStmt`) | `ch <- NotTree{}` (`var ch chan Tree`) | 미검사 | 채널의 엘리먼트 타입(`chan.Elem()`)이 합타입이면 전송 표현식 검사 |
+| 8 | **타입 단언 (`*ast.TypeAssertExpr`)** | `a.(Tree)`, `tree.(NotTree)` | 미검사 | 런타임에 `Tree`가 인터페이스로 소거되어 모든 타입이 통과하는 구멍을 막기 위해 합타입으로의 무분별한 타입 단언(`a.(Tree)`) 및 합타입에서 허용되지 않은 타입으로의 단언(`tree.(NotTree)`) 차단 |
 
 ### 2.6. `type switch` 검증 규칙 (`checkTypeSwitch`)
 1. **임의의 타겟 표현식 지원**:
    - `switch x.(type)`에서 `x`가 단순 변수(`*ast.Ident`)뿐만 아니라 `s.tree.(type)`, `getTree().(type)`, `trees[0].(type)` 등 임의의 표현식이더라도 `TypesInfo.TypeOf(targetExpr)`를 통해 합타입 여부를 식별합니다.
-2. **케이스 유효성 및 `case nil:` 필수 검사**:
-   - 허용되지 않은 타입이 `case`에 등장하면 에러를 보고합니다.
-   - 스위치별 로컬 상태인 `nilHandled`를 추적하여 `case nil:`이 누락된 경우 누락 케이스로 보고하며, 합타입 선언 메타데이터를 변이시키지 않습니다.
-3. **`default:` 절의 취급**:
-   - 합타입에 새로운 타입이 추가되었을 때 누락된 `switch`를 컴파일 타임에 잡아낸다는 핵심 목적을 위해, 기본적으로는 모든 허용 타입과 `nil`이 `case`에 명시되어야 합니다.
-   - 단, `default:`가 존재할 때 누락된 케이스를 허용할지 여부는 향후 분석기 플래그(예: `-allow-default`)로 제어할 수 있도록 설계합니다.
+2. **평탄화된 리프 매칭 강제 (중첩 합타입 분기 금지)**:
+   - Go 런타임에서 중첩 합타입(예: `type SmallInt any`)은 빈 인터페이스(`any`) 또는 메서드 셋으로 타입 소거(Type Erasure)됩니다. 따라서 `AllInt`(`SmallInt | int32 | int64`)에 대한 `switch`에서 `case SmallInt:`를 허용하면 런타임에 `int32`, `int64`까지 모두 `case SmallInt:`가 집어삼키는 치명적인 버그가 발생합니다.
+   - 따라서 `type switch`의 `case`에는 중첩 합타입 자체를 사용할 수 없으며, 반드시 평탄화된 리프 항(`case int8, int16:`)으로 매칭해야 합니다.
+3. **하위 타입 특수화(Narrowing) 허용 및 분기 가리움(Shadowing) 차단**:
+   - 선언부에서는 `*MyError | error`가 금지되지만, `string | error` 합타입에 대한 `switch x.(type)` 문에서는 `case error:` **앞에** 구체화된 `case *MyError:` 분기를 작성하는 것(Narrowing)은 허용됩니다.
+   - 이때 `*MyError`는 `error`에 속하므로 유효한 케이스로 인정되지만, `*MyError`만으로는 `error` 전체가 소거되지 않으므로 뒤에 `case error:`도 반드시 존재해야 합니다.
+   - 반대로 `case error:`가 먼저 등장한 **뒤에** `case *MyError:`가 등장하거나 동일한 케이스가 중복 등장하면, 런타임에 앞선 분기에 의해 가로채어져 절대 도달할 수 없으므로 **분기 가리움(Shadowed / Unreachable case) 에러**를 보고합니다.
+4. **`case nil:` 절대 필수 및 잉여 `default:` 금지**:
+   - 평탄화된 모든 리프 항(`ConcreteTerms`, `IfaceTerms`)과 `case nil:`이 반드시 명시되어야 합니다.
+   - 모든 리프 항과 `case nil:`이 처리된 상태에서 `default:` 절은 도달 불가능한 죽은 코드이거나 새로운 타입 추가 시 린터를 무력화하고 내부에서 `nil` 패닉을 유발할 수 있으므로, `default:` 절은 누락된 케이스를 대체하지 않으며 잉여 `default:` 절 사용을 금지합니다.
 
 ### 2.7. 패키지 간(Cross-Package) 분석 아키텍처 (`analysis.Fact`)
 - **문제**: Go의 컴파일 단위는 패키지이며, 다른 패키지에서 import한 타입의 AST 주석(`// goaugtype:`)은 현재 패키지의 `pass.Files`에 존재하지 않습니다.
@@ -117,20 +129,20 @@ Go 표준 라이브러리의 `go/types` 패키지(`typeset.go`, `termlist.go`, `
    - 따라서 `types.NewUnion`에 `string | error`를 그대로 넣으면 타입 셋 전체가 `any`(`𝓤`)로 오염됩니다.
 2. **중첩 합타입(`I1 | float64`)의 기저 타입(`any`) 치환**:
    - 실제 Go 코드에서 `type I1 any`의 기저 타입은 빈 인터페이스이므로, `go/types`가 아닌 `goaugtype`의 자체 합타입 레지스트리에서 `I1`의 타입 셋을 찾아 평탄화해야 합니다.
-3. **`type switch` 차집합(Missing Cases) 계산**:
-   - `concreteTerms`, `ifaceTerms`, 그리고 `nil`에 대해 `type switch`의 완전성(Set Cover / Difference) 연산을 수행해야 합니다.
+3. **선언부 서로소 검증 및 `type switch` 차집합(Missing Cases) 계산**:
+   - `concreteTerms`와 `ifaceTerms` 간의 쌍별 서로소(Pairwise Disjointness) 검증과 `type switch`의 완전성(Set Cover / Difference) 연산을 수행해야 합니다.
 
 #### `SumTypeSet` 데이터 모델 (`go/types._TypeSet` 변형)
 ```go
 type SumTypeSet struct {
     selfIface     *types.Interface   // 합타입 자체의 인터페이스 (메서드 셋 검증용, #9)
     concreteTerms []types.Type       // 구체 타입 항들 (types.Identical 비교)
-    ifaceTerms    []*types.Interface // 일반 인터페이스 항들 (error, io.Reader 등 -> types.Implements 비교, #5)
+    ifaceTerms    []types.Type       // 비어 있지 않은 일반 인터페이스 항들 (error, io.Reader 등 -> types.Implements 비교, #5)
 }
 ```
+- `ValidateTerms() []augtError`: 메서드 셋 구현 여부(#9) 및 `concreteTerms`·`ifaceTerms` 간의 쌍별 서로소(Pairwise Disjointness) 검증.
 - `Includes(V types.Type) bool`: `go/types`의 `implements` / `term.includes`에 대응.
 - `SubsetOf(other *SumTypeSet) bool`: `go/types`의 `_TypeSet.subsetOf`에 대응 (#10).
-- `MissingCases(handled []types.Type, nilHandled bool) []string`: `type switch` 누락 케이스(미처리 타입 및 `!nilHandled`일 때의 `nil`) 계산.
 
 #### 업스트림(`golang/go`) 코드 변경 자동 추적 전략
 참조 원본인 `src/go/types/{typeset,termlist,typeterm,union,instantiate}.go`(원본 소스: `src/cmd/compile/internal/types2/`)가 향후 Go 버전에서 변경되었는지 정확하고 안정적으로 추적하기 위해 설정 파일과 전용 CLI 도구(`./cmd/upstreamchecker`), 그리고 래퍼 스크립트(`./scripts`)로 구성된 체계를 구축합니다:
@@ -151,16 +163,16 @@ type SumTypeSet struct {
 
 ## 3. 단계별 구현 로드맵 및 이슈 구성
 
-기존 이슈(#1, #2, #5, #6 — #4는 순수 #57644 제로값 모델 채택으로 대체됨)와의 연속성을 유지하면서 위 설계를 구현하기 위한 작업 단위는 다음과 같습니다:
+기존 이슈(#1, #2, #5 — #4와 #6은 순수 #57644 모델 및 정적 반환 검사로 대체됨)와의 연속성을 유지하면서 위 설계를 구현하기 위한 작업 단위는 다음과 같습니다:
 
 1. **[#14] `go/types` 기반 `SumTypeSet` 엔진 도입 및 `./cmd/upstreamchecker` 구축**:
    - `go/types/typeset.go` 및 `instantiate.go` 구조를 기반으로 `SumTypeSet`을 구현하고, 기준 리비전 설정(`upstream.json`), `./cmd/upstreamchecker` (기본값: 최신 정식 릴리즈 태그 비교), `./scripts/check-upstream.sh` 및 `./scripts/release.sh` 구축.
 2. **[#8] Core Bugfixes & AST Expression Generalization** (기존 #2 해결 포함):
    - `*ast.Ident` 제약을 제거하고 `TypesInfo.TypeOf` 기반으로 전환, `var (...)` 블록 다중 스펙 누락 수정, 다중 반환 함수 대입 시 슬라이스 인덱스 패닉 수정, `checkTypeSwitch`의 스위치별 `nilHandled` 상태 분리.
-3. **[#7] Type Conversion Bypass Prevention (`SumType(x)`)**:
-   - `*ast.CallExpr`에서 합타입으로의 명시적 타입 변환을 검사하여 타입 안전성 우회 차단.
-4. **[#9, #10] General Interface & Type Set Semantics (Pure #57644 Alignment)** (기존 #5 확장):
-   - 메서드를 가진 인터페이스 허용 및 `types.Implements` 검증(#9), 지시자 내 `~T` 및 `nil` 문법 명시적 거부(#9), 인터페이스 유니온 항 지원(#5), 중첩 합타입 평탄화(Flattening) 및 부분집합($\subseteq$) 대입 지원(#10).
+3. **[#7] Type Conversion & Type Assertion Bypass Prevention (`SumType(x)`, `x.(SumType)`)**:
+   - `*ast.CallExpr`에서의 명시적 타입 변환 및 `*ast.TypeAssertExpr`에서의 타입 단언을 검사하여 타입 안전성 우회 차단.
+4. **[#9, #10] General Interface, Disjoint Union Invariant & Type Set Semantics (Pure #57644 Alignment)** (기존 #5 확장):
+   - 메서드를 가진 인터페이스 허용 및 `types.Implements` 검증(#9), 지시자 내 `~T` 및 `nil` 문법 명시적 거부(#9), 평탄화 항 간 서로소 불변식(Pairwise Disjointness) 강제, 비어 있지 않은 일반 인터페이스 유니온 항 지원(#5), 중첩 합타입 평탄화(Flattening) 및 부분집합($\subseteq$) 대입 지원(#10).
 5. **[#11] Complete Assignability Contexts** (기존 #1 확장):
    - `return` 문(#1), 함수 호출 인자, 복합 리터럴(`struct`, `slice`, `map`), 채널 전송(`ch <- x`) 검사 구현.
 6. **[#12] Cross-Package Analysis via `analysis.Fact`**:
