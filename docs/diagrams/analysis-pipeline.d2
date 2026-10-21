@@ -1,0 +1,41 @@
+direction: right
+
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 200
+  }
+}
+
+pass1: "Phase 1: AST & Directive Collection (collectInfo)" {
+  files: "pass.Files ([]*ast.File)"
+  cmtmap: "ast.NewCommentMap"
+  inspect: "inspector.inspect"
+  collected: "collected struct\n- adtDecls\n- assignStmts / declAssigns\n- typeSwitchStmts\n- callExprs / funcDecls / funcLits\n- compositeLits / sendStmts / typeAssertExprs"
+
+  files -> cmtmap -> inspect -> collected
+}
+
+pass2: "Phase 2: SumTypeSet Construction (BuildRegistry)" {
+  eval: "Stage 1: Raw Evaluation\n- Reject '~T' & 'nil' in directives\n- types.Eval(sumType & terms)"
+  flatten: "Stage 2: DFS Flattening\n- Expand nested sum types\n- Partition ConcreteTerms (C) & IfaceTerms (I)"
+  disjoint: "Stage 3: ValidateTerms()\n- SelfIface method check (#9)\n- No duplicate C_i == C_j\n- No empty interface (any)\n- No C_i implements I_k\n- No I_k implements I_m"
+  export: "Stage 4: Fact Export\n- pass.ExportObjectFact(SumTypeFact)"
+
+  eval -> flatten -> disjoint -> export
+}
+
+pass3: "Phase 3: Static Verification (check)" {
+  assign8: "8 Assignability / Conversion / Assertion Paths\n1. checkAssign (LHS TypeOf, 1:1 & Tuple)\n2. checkTypeConversion (Tree(x))\n3. checkReturn (FuncDecl & FuncLit)\n4. checkCallArgs (Normal, Variadic, Tuple)\n5. checkCompositeLit (Slice/Array/Map/Struct)\n6. checkSend (ch <- val)\n7. checkTypeAssert (x.(Tree) & tree.(T))"
+  switch_chk: "Exhaustive Type Switch Verifier (checkTypeSwitch)\n- Leaf-only matching (reject nested sum types)\n- Subtype narrowing (before base interface)\n- Shadowing detection (after base interface / dup)\n- Mandatory 'case nil:' & no redundant 'default:'"
+  report: "pass.Reportf(pos, diagnostic)"
+
+  assign8 -> report
+  switch_chk -> report
+}
+
+pass1.collected -> pass2.eval: "adtDecls"
+pass1.collected -> pass3.assign8: "AST nodes"
+pass1.collected -> pass3.switch_chk: "typeSwitchStmts"
+pass2.export -> pass3.assign8: "Registry"
+pass2.export -> pass3.switch_chk: "Registry"
