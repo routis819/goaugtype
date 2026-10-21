@@ -1,0 +1,67 @@
+direction: down
+
+vars: {
+  d2-config: {
+    layout-engine: elk
+    theme-id: 200
+  }
+}
+
+tooling: "CLI & Release Gatekeeper Layer" {
+  goaugadt: "cmd/goaugadt\n(singlechecker CLI)"
+  upstreamchecker: "cmd/upstreamchecker\n(go/types drift detector)"
+  scripts: "scripts/check-upstream.sh\nscripts/release.sh"
+  upstream_json: "upstream.json\n(base_revision & SHA-256)" {
+    shape: cylinder
+  }
+
+  scripts -> upstreamchecker: invokes
+  upstreamchecker -> upstream_json: verifies / updates
+}
+
+engine: "Core Static Analysis Engine (pkg/analyzer)" {
+  run: "Analyzer.Run (run)\ncheck.go"
+  collector: "Pass 1: AST & Directive Collector\n(collectInfo / inspector)"
+  builder: "Pass 2: Registry & TypeSet Builder\n(BuildRegistry)"
+  registry: "Registry & SumTypeSet\n(adt.go)" {
+    shape: class
+    UpstreamBaseRevision: "const string"
+    ConcreteTerms: "[]types.Type (Identical)"
+    IfaceTerms: "[]types.Type (Implements)"
+    ValidateTerms: "() []augtError (Disjointness)"
+    Includes: "(v types.Type) bool"
+    SubsetOf: "(other *SumTypeSet) bool"
+  }
+  checker: "Pass 3: 8-Path & Switch Verifier\n(check)" {
+    p1: "1. checkAssign (AssignStmt & ValueSpec)"
+    p2: "2. checkTypeSwitch (Leaf, Narrowing, Shadowing, nil, default)"
+    p3: "3. checkTypeConversion (T(x))"
+    p4: "4. checkReturn (FuncDecl & FuncLit)"
+    p5: "5. checkCallArgs (Normal, Variadic, Tuple)"
+    p6: "6. checkCompositeLit (Slice, Array, Map, Struct)"
+    p7: "7. checkSend (ch <- val)"
+    p8: "8. checkTypeAssert (x.(Tree) & tree.(T))"
+  }
+  fact: "SumTypeFact\n(analysis.Fact Gob Codec)" {
+    shape: page
+  }
+
+  run -> collector: "1. Collect AST & directives"
+  collector -> builder: "2. Raw goAugADTDecl[]"
+  builder -> registry: "3. Flatten & validate disjointness"
+  registry <-> fact: "ExportObjectFact / ImportObjectFact"
+  run -> checker: "4. Execute static checks"
+  checker -> registry: "5. Query Lookup / Includes / SubsetOf"
+}
+
+gostd: "Go Standard Library & golang.org/x/tools" {
+  go_analysis: "golang.org/x/tools/go/analysis\n(Pass, Fact, analysistest)"
+  go_types: "go/ast + go/types\n(TypesInfo, Eval, Implements, Identical)"
+}
+
+tooling.goaugadt -> engine.run
+tooling.upstreamchecker -> engine.registry: "verifies UpstreamBaseRevision"
+engine.collector -> gostd.go_types
+engine.builder -> gostd.go_types
+engine.checker -> gostd.go_types
+engine.fact -> gostd.go_analysis
