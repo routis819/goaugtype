@@ -51,26 +51,81 @@ type SumTypeSet struct {
 }
 
 func (s *SumTypeSet) ValidateTerms() []augtError {
-	if s.SelfIface == nil || s.SelfIface.NumMethods() == 0 {
-		return nil
-	}
 	var errs []augtError
-	for _, t := range s.ConcreteTerms {
-		if !types.Implements(t, s.SelfIface) {
+
+	if s.SelfIface != nil && s.SelfIface.NumMethods() > 0 {
+		for _, t := range s.ConcreteTerms {
+			if !types.Implements(t, s.SelfIface) {
+				errs = append(errs, augtError{
+					pos: s.Pos,
+					err: fmt.Errorf("permitted type %s does not implement %s", getCanonicalName(t), getCanonicalName(s.SumType)),
+				})
+			}
+		}
+		for _, t := range s.IfaceTerms {
+			if !types.Implements(t, s.SelfIface) {
+				errs = append(errs, augtError{
+					pos: s.Pos,
+					err: fmt.Errorf("permitted type %s does not implement %s", getCanonicalName(t), getCanonicalName(s.SumType)),
+				})
+			}
+		}
+	}
+
+	// a) No Duplicate Concrete Types
+	for i := 0; i < len(s.ConcreteTerms); i++ {
+		for j := i + 1; j < len(s.ConcreteTerms); j++ {
+			if types.Identical(s.ConcreteTerms[i], s.ConcreteTerms[j]) {
+				errs = append(errs, augtError{
+					pos: s.Pos,
+					err: fmt.Errorf("duplicate concrete type %s in sum type %s", getCanonicalName(s.ConcreteTerms[i]), getCanonicalName(s.SumType)),
+				})
+			}
+		}
+	}
+
+	// b) No Empty Interface Terms (any / interface{})
+	for _, it := range s.IfaceTerms {
+		iface, ok := it.Underlying().(*types.Interface)
+		if !ok || iface.NumMethods() == 0 {
 			errs = append(errs, augtError{
 				pos: s.Pos,
-				err: fmt.Errorf("permitted type %s does not implement %s", getCanonicalName(t), getCanonicalName(s.SumType)),
+				err: fmt.Errorf("empty interface %s is not permitted in sum type %s", getCanonicalName(it), getCanonicalName(s.SumType)),
 			})
 		}
 	}
-	for _, t := range s.IfaceTerms {
-		if !types.Implements(t, s.SelfIface) {
-			errs = append(errs, augtError{
-				pos: s.Pos,
-				err: fmt.Errorf("permitted type %s does not implement %s", getCanonicalName(t), getCanonicalName(s.SumType)),
-			})
+
+	// c) No Concrete Term Implementing a Regular Interface Term (C ⊂ I)
+	for _, ct := range s.ConcreteTerms {
+		for _, it := range s.IfaceTerms {
+			if iface, ok := it.Underlying().(*types.Interface); ok && iface.NumMethods() > 0 {
+				if types.Implements(ct, iface) {
+					errs = append(errs, augtError{
+						pos: s.Pos,
+						err: fmt.Errorf("overlapping union terms: %s already implements %s in sum type %s", getCanonicalName(ct), getCanonicalName(it), getCanonicalName(s.SumType)),
+					})
+				}
+			}
 		}
 	}
+
+	// d) No Overlapping Regular Interface Terms (I1 ⊆ I2 or I2 ⊆ I1)
+	for i := 0; i < len(s.IfaceTerms); i++ {
+		for j := i + 1; j < len(s.IfaceTerms); j++ {
+			it1, it2 := s.IfaceTerms[i], s.IfaceTerms[j]
+			iface1, ok1 := it1.Underlying().(*types.Interface)
+			iface2, ok2 := it2.Underlying().(*types.Interface)
+			if ok1 && ok2 && iface1.NumMethods() > 0 && iface2.NumMethods() > 0 {
+				if types.Implements(it1, iface2) || types.Implements(it2, iface1) {
+					errs = append(errs, augtError{
+						pos: s.Pos,
+						err: fmt.Errorf("overlapping interface terms %s and %s in sum type %s", getCanonicalName(it1), getCanonicalName(it2), getCanonicalName(s.SumType)),
+					})
+				}
+			}
+		}
+	}
+
 	return errs
 }
 
@@ -157,15 +212,10 @@ func (s *SumTypeSet) IsPermittedCaseType(reg *Registry, caseType types.Type) boo
 	if s == nil || caseType == nil {
 		return false
 	}
-	if s.Includes(caseType) {
-		return true
+	if reg != nil && reg.Lookup(caseType) != nil {
+		return false
 	}
-	if reg != nil {
-		if subSum := reg.Lookup(caseType); subSum != nil && subSum.SubsetOf(s) {
-			return true
-		}
-	}
-	return false
+	return s.Includes(caseType)
 }
 
 type Registry struct {
@@ -380,13 +430,9 @@ func BuildRegistry(pass *analysis.Pass, rawDecls []goAugADTDecl) (*Registry, []a
 					expand(nested.RawTerms)
 					delete(visited, cName)
 				} else if types.IsInterface(t) {
-					if !containsType(s.IfaceTerms, t) {
-						s.IfaceTerms = append(s.IfaceTerms, t)
-					}
+					s.IfaceTerms = append(s.IfaceTerms, t)
 				} else {
-					if !containsType(s.ConcreteTerms, t) {
-						s.ConcreteTerms = append(s.ConcreteTerms, t)
-					}
+					s.ConcreteTerms = append(s.ConcreteTerms, t)
 				}
 			}
 		}

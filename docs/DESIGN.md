@@ -10,10 +10,10 @@ To resolve specification ambiguities and soundness holes identified in the initi
 1. **Pure Pre-implementation of `golang/go#57644`**:
    - Proposal `#57644` extends type unions (`T1 | T2`), which are currently restricted to generic type parameter constraints, to **ordinary (general) interfaces** used as variable types.
    - Because the current Go compiler rejects union elements inside ordinary interfaces used as variable types (`interface contains type constraints`), `goaugtype` uses the `// goaugtype: T1 | T2` directive on standard Go interface declarations (`type I any` or `type I interface { ... }`) to **statically emulate the exact Type Set semantics of `#57644`**.
-2. **Consistent Type Set Semantics**:
-   - Rather than inventing an ad-hoc type system or custom `nil` annotations, sum types are defined as a natural extension of Go 1.18+ **Interface Type Sets, `Implements`, and `Assignability` rules**.
-3. **Static Exhaustiveness Checking**:
-   - While `#57644` deferred compiler-enforced `type switch` exhaustiveness for backward compatibility, `goaugtype` acts as a strict linter that verifies whether `type switch` statements exhaustively handle all elements in a sum type's type set plus the interface zero value (`nil`).
+2. **Consistent Type Set Semantics with Disjoint Orthogonality**:
+   - Rather than inventing an ad-hoc type system or custom `nil` annotations, sum types are defined as a natural extension of Go 1.18+ **Interface Type Sets, `Implements`, and `Assignability` rules**, reinforced with **Pairwise Disjointness** across flattened union terms so that adding a new variant always triggers exhaustiveness errors across existing `type switch` statements.
+3. **Static Exhaustiveness Checking & Type Erasure Safety**:
+   - While `#57644` deferred compiler-enforced `type switch` exhaustiveness for backward compatibility, `goaugtype` acts as a strict linter that verifies whether `type switch` statements exhaustively handle all leaf elements in a sum type's type set plus the interface zero value (`nil`), while preventing runtime type erasure shadowing.
 
 ---
 
@@ -50,7 +50,7 @@ type Tree interface {
   - Following standard Go assignability rules, when an untyped constant (e.g., `10`, `"hello"`) is assigned to an interface, it is first evaluated as its default type (`int`, `float64`, `string`, `bool`, etc.) before checking membership in the type set.
   - Example: Assigning an untyped constant `10` (default type `int`) to `SmallInt` (`// goaugtype: int8 | int16`) is rejected because `int` is not in the type set; an explicit conversion (`int8(10)`) is required.
 
-### 2.3. Interface Terms and Nested/Composed Sum Types
+### 2.3. Interface Terms, Nested Sum Types, and Disjoint Union Invariant
 > **From #57644**: *"Embedding a union in an interface affects the interface's type set."*
 
 Each term in a sum type union may be a concrete type, a regular interface, or another sum type.
@@ -58,9 +58,15 @@ Each term in a sum type union may be a concrete type, a regular interface, or an
 1. **Type Set Flattening and Subset Assignability**:
    - If sum type $I_2$ includes another sum type $I_1$ in its directive (`// goaugtype: I1 | float64`), the effective type set of $I_2$ is flattened to $\text{TypeSet}(I_1) \cup \{\text{float64}\}$.
    - Assigning a value of sum type $S$ to a target of sum type $T$ is permitted even when $S$ and $T$ are not identical (`!types.Identical(S, T)`), provided that **$\text{TypeSet}(S) \subseteq \text{TypeSet}(T)$**.
-   - In a `switch x.(type)` statement, a `case I1:` branch marks all member types in $\text{TypeSet}(I_1)$ as handled.
 2. **Regular Interface Terms (Issue #5)**:
    - When a union includes a regular (non-sum) interface term (e.g., `error`, `io.Reader`), assigning a value of type $V$ is valid if $V$ implements that interface (`types.Implements(V, TermInterface)`).
+3. **Disjoint Union Invariant (No Overlapping Terms)**:
+   - To guarantee strict exhaustiveness checking comparable to tagged unions in languages like Haskell or Rust—where adding a new variant to a sum type always triggers unhandled-case diagnostics across existing `type switch` statements—`goaugtype` enforces **pairwise inclusion disjointness** across all flattened union terms:
+     1. **No Duplicate Concrete Types**: No two flattened concrete terms $C_1, C_2$ may satisfy `types.Identical(C_1, C_2)`.
+     2. **No Non-Empty Interface Overlap**:
+        - Every regular (non-sum) interface term $I$ must declare at least one method (`I.NumMethods() > 0`; `any` / `interface{}` is rejected).
+        - No concrete term $C$ may implement any regular interface term $I$ in the same sum type (`types.Implements(C, I)` is rejected). For example, `// goaugtype: *MyError | error` is rejected at the declaration site because `*MyError` is already a subset of `error`.
+        - No two regular interface terms $I_1, I_2$ may have a subtype/supertype relationship (`types.Implements(I_1, I_2)` or `types.Implements(I_2, I_1)` is rejected).
 
 ### 2.4. Zero Value (`nil`) Semantics in the Pure #57644 Model
 > **From #57644**: *"In particular, the zero value of an interface type with an embedded union would be `nil`, just as for any interface type. So this is a form of sum type in which there is always another possible option, namely `nil`."*
@@ -70,14 +76,14 @@ Under the pure `#57644` model, a sum type is an ordinary Go interface type with 
 1. **Zero Value is Always `nil`**:
    - Every sum type variable has `nil` as its zero value. Uninitialized variable declarations (`var x Tree`), zero-initialized composite fields, and explicit `nil` assignments (`x = nil`) are **always valid** for any sum type.
 2. **`case nil:` is Always Required in `type switch`**:
-   - Because `nil` is always a possible value of any sum type interface, every exhaustive `switch x.(type)` over a sum type must explicitly handle `case nil:` (unless a `default:` branch is permitted via analyzer configuration).
+   - Because `nil` is always a possible value of any sum type interface, every exhaustive `switch x.(type)` over a sum type must explicitly handle `case nil:`.
 3. **Typed `nil` vs. Untyped `nil`**:
    - In `var leaf *Leaf = nil; var t Tree = leaf`, `t` holds a non-nil interface value with dynamic type `*Leaf` (`(*Leaf)(nil)`). It matches `case *Leaf:` in a `type switch` and is treated as `*Leaf` for type set membership.
 
-### 2.5. Complete Assignability and Conversion Verification
+### 2.5. Complete Assignability, Conversion, and Assertion Verification (8 Paths)
 > **From #57644**: *"As always, a variable of interface type may store a value of any type that is in its type set... Inversely, a variable of interface type may not store a value of any type that is not in its type set."*
 
-A non-`nil` value whose type is outside the sum type's type set must not be stored into or converted to that sum type through any code path. Therefore, `goaugtype` inspects **all AST locations where Go assignability or type conversion occurs**, not just simple identifier assignments (`ident = expr`):
+A non-`nil` value whose type is outside the sum type's type set must not be stored into, converted to, or asserted from/to that sum type through any code path. Therefore, `goaugtype` inspects **all 8 AST locations where Go assignability, type conversion, or type assertion occurs**:
 
 | # | AST Location | Example | Legacy Behavior | Target Behavior |
 | :--- | :--- | :--- | :--- | :--- |
@@ -88,16 +94,21 @@ A non-`nil` value whose type is outside the sum type's type set must not be stor
 | 5 | Function call arguments (`*ast.CallExpr`) | `takeTree(NotTree{})` | Unchecked | Match call arguments against parameter types (including variadic parameters) |
 | 6 | Composite literals (`*ast.CompositeLit`) | `[]Tree{NotTree{}}`, `MyStruct{TreeField: NotTree{}}` | Unchecked | Validate slice, array, map, and struct literal elements against their target element/field sum types |
 | 7 | Channel sends (`*ast.SendStmt`) | `ch <- NotTree{}` (`var ch chan Tree`) | Unchecked | Validate sent expression when `chan.Elem()` is a sum type |
+| 8 | **Type assertions (`*ast.TypeAssertExpr`)** | `a.(Tree)`, `tree.(NotTree)` | Unchecked | Reject asserting an arbitrary value to a sum type (`x.(Tree)` when `x` is not statically in `Tree`'s type set, due to Go runtime interface erasure) and reject asserting a sum type to an unpermitted type (`tree.(NotTree)`) |
 
 ### 2.6. `type switch` Verification Rules (`checkTypeSwitch`)
 1. **Arbitrary Target Expressions**:
    - In `switch x.(type)`, `x` is inspected via `TypesInfo.TypeOf(targetExpr)` regardless of whether it is a simple identifier (`*ast.Ident`) or a complex expression (`s.tree.(type)`, `getTree().(type)`, `trees[0].(type)`).
-2. **Case Validity and `case nil:` Requirement**:
-   - Reports a diagnostic if an unpermitted type appears in a `case` clause.
-   - Tracks `nilHandled` as per-switch state and reports a missing `nil` case if `case nil:` is omitted. Duplicate `case nil:` clauses are already rejected by the Go type checker or handled cleanly without mutating sum type metadata.
-3. **`default:` Clause Policy**:
-   - To preserve the primary value of sum types—catching unhandled variants at compile time when a new member is added—all permitted member types (and `nil`) must be explicitly covered by `case` clauses by default.
-   - Whether a `default:` branch suppresses missing-case diagnostics can be exposed as an optional analyzer flag (e.g., `-allow-default`).
+2. **Flattened Leaf Matching Only (No Nested Sum Types in `case`)**:
+   - Because a nested sum type (`type SmallInt any`) is erased to `interface{}` (or its method set) at Go runtime, writing `case SmallInt:` in a `type switch` over `AllInt` (`SmallInt | int32 | int64`) would match *every* value at runtime and swallow subsequent branches.
+   - Therefore, nested sum types are **prohibited** as `case` targets in a `type switch`; cases must match flattened leaf terms (`case int8, int16:`).
+3. **Subtype Specialization (Narrowing) and Shadowing Prevention**:
+   - While `*MyError | error` is prohibited in the union declaration, a `switch x.(type)` over `string | error` **may** include a specialized `case *MyError:` branch **before** `case error:`.
+   - `case *MyError:` is valid because `*MyError` is included in `error`, does not exhaust `error` on its own, and is safe as long as it precedes `case error:`.
+   - Conversely, if `case *MyError:` appears **after** `case error:` (or after a duplicate concrete type), the analyzer reports a **shadowed / unreachable case** diagnostic because `case error:` already intercepts all `*MyError` values at runtime.
+4. **Mandatory `case nil:` and No Redundant `default:`**:
+   - All flattened leaf terms (`ConcreteTerms` and `IfaceTerms`) and `case nil:` must be explicitly handled.
+   - Once all flattened leaf terms and `case nil:` are covered, a `default:` branch is unreachable dead code that can mask future bugs or cause nil panics; therefore, `default:` does not substitute for missing cases and is rejected as redundant when all cases are exhausted.
 
 ### 2.7. Cross-Package Analysis Architecture (`analysis.Fact`)
 - **Problem**: Go's unit of compilation and analysis is a single package; AST comments (`// goaugtype:`) from imported packages are not present in `pass.Files`.
@@ -116,20 +127,20 @@ Go's standard library `go/types` package (`typeset.go`, `termlist.go`, `typeterm
    - Passing `string | error` directly to `types.NewUnion` would therefore collapse the entire union into `any` (`𝓤`).
 2. **Expanding Nested Sum Types (`I1 | float64`) Beyond Their Underlying `any` Type**:
    - In standard Go AST/types, `type I1 any` has `any` as its underlying type. Flattening `I1` requires looking up `I1`'s `SumTypeSet` from `goaugtype`'s registry rather than `go/types`.
-3. **Computing `type switch` Set Differences**:
-   - `goaugtype` must compute missing cases (set cover / difference over `concreteTerms`, `ifaceTerms`, and `nil`) for `type switch` exhaustiveness.
+3. **Enforcing Pairwise Disjointness & Computing `type switch` Set Differences**:
+   - `goaugtype` validates pairwise disjointness across `concreteTerms` and `ifaceTerms` and computes missing cases (set cover / difference over `concreteTerms`, `ifaceTerms`, and `nil`) for `type switch` exhaustiveness.
 
 #### `SumTypeSet` Data Model (Adapted from `go/types._TypeSet`)
 ```go
 type SumTypeSet struct {
     selfIface     *types.Interface   // The sum type interface itself (for method set validation, #9)
     concreteTerms []types.Type       // Concrete type terms (matched via types.Identical)
-    ifaceTerms    []*types.Interface // Regular interface terms (e.g., error, io.Reader -> matched via types.Implements, #5)
+    ifaceTerms    []types.Type       // Regular non-empty interface terms (e.g., error, io.Reader -> matched via types.Implements, #5)
 }
 ```
+- `ValidateTerms() []augtError`: Verifies method set implementation (`#9`) and pairwise disjointness across `concreteTerms` and `ifaceTerms`.
 - `Includes(V types.Type) bool`: Analogous to `implements` / `term.includes` in `go/types`.
 - `SubsetOf(other *SumTypeSet) bool`: Analogous to `_TypeSet.subsetOf` in `go/types` (#10).
-- `MissingCases(handled []types.Type, nilHandled bool) []string`: Computes uncovered variants (and `nil` if `!nilHandled`) for `type switch` exhaustiveness.
 
 #### Automated Upstream (`golang/go`) Revision Tracking Strategy
 To reliably track whether the reference files in `src/go/types/{typeset,termlist,typeterm,union,instantiate}.go` (mirrored from `src/cmd/compile/internal/types2/`) change in future Go releases, the repository includes a configuration file, a dedicated CLI tool (`./cmd/upstreamchecker`), and wrapper scripts (`./scripts`):
@@ -150,16 +161,16 @@ To reliably track whether the reference files in `src/go/types/{typeset,termlist
 
 ## 3. Implementation Roadmap & GitHub Issues
 
-While preserving continuity with existing issues (#1, #2, #5, #6; note that #4 is superseded by the pure #57644 zero-value model), the implementation is structured into the following milestones:
+While preserving continuity with existing issues (#1, #2, #5; note that #4 and #6 are superseded by the pure #57644 model and static return checking), the implementation is structured into the following milestones:
 
 1. **[#14] `SumTypeSet` Engine Adapted from `go/types` & `./cmd/upstreamchecker`**:
    - Implement `SumTypeSet` modeled after `go/types/typeset.go` and `instantiate.go`, along with `upstream.json`, `./cmd/upstreamchecker` (defaulting to the latest official release tag), `./scripts/check-upstream.sh`, and `./scripts/release.sh`.
 2. **[#8] Core Bugfixes & AST Expression Generalization** (supersedes #2):
    - Replace `*ast.Ident`-only assumptions with `TypesInfo.TypeOf`, inspect all specs in `var (...)` blocks, prevent slice out-of-bounds panics on multi-return assignments, and isolate per-switch `nilHandled` state in `checkTypeSwitch`.
-3. **[#7] Type Conversion Bypass Prevention (`SumType(x)`)**:
-   - Inspect explicit type conversions in `*ast.CallExpr` when the target type is a sum type.
-4. **[#9, #10] General Interface & Type Set Semantics (Pure #57644 Alignment)** (extends #5):
-   - Support interfaces with methods and validate union terms via `types.Implements` (#9), explicitly reject `~T` and `nil` in union directives (#9), support regular interface union terms (#5), and implement nested sum type flattening and subset ($\subseteq$) assignability (#10).
+3. **[#7] Type Conversion & Type Assertion Bypass Prevention (`SumType(x)`, `x.(SumType)`)**:
+   - Inspect explicit type conversions in `*ast.CallExpr` and type assertions in `*ast.TypeAssertExpr` involving sum types.
+4. **[#9, #10] General Interface, Disjoint Union Invariant & Type Set Semantics (Pure #57644 Alignment)** (extends #5):
+   - Support interfaces with methods and validate union terms via `types.Implements` (#9), explicitly reject `~T` and `nil` in union directives (#9), enforce pairwise disjointness across flattened terms, support regular non-empty interface union terms (#5), and implement nested sum type flattening and subset ($\subseteq$) assignability (#10).
 5. **[#11] Complete Assignability Contexts** (extends #1):
    - Enforce sum type assignability across `return` statements (#1), function call arguments, composite literals (`struct`, `slice`, `map`), and channel sends (`ch <- x`).
 6. **[#12] Cross-Package Analysis via `analysis.Fact`**:

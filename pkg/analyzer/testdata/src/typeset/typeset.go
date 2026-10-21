@@ -1,6 +1,9 @@
 package typeset
 
-import "fmt"
+import (
+	"fmt"
+	"io"
+)
 
 // --- General interface with methods (#9) ---
 
@@ -29,6 +32,20 @@ type BadUnderlying any
 
 // goaugtype: nil // want "nil is not a type and is not permitted in sum type directives"
 type BadNil any
+
+// goaugtype: int | int // want "duplicate concrete type int in sum type typeset.BadDup"
+type BadDup any
+
+// goaugtype: any // want "empty interface any is not permitted in sum type typeset.BadEmpty"
+type BadEmpty any
+
+// goaugtype: *MyError | error // want "overlapping union terms: \\*typeset.MyError already implements error in sum type typeset.BadOverlapConcrete"
+type BadOverlapConcrete any
+
+// goaugtype: io.ReadWriter | io.Reader // want "overlapping interface terms io.ReadWriter and io.Reader in sum type typeset.BadOverlapIfaces"
+type BadOverlapIfaces any
+
+var _ io.Reader
 
 func testNodeWalker() {
 	var nw NodeWalker
@@ -75,6 +92,30 @@ func testStrOrErr() {
 	switch x.(type) { // want "non-exhaustive type switch. missing cases: nil"
 	case string, error:
 	}
+
+	// Valid narrowing: *MyError before error
+	switch x.(type) {
+	case *MyError:
+	case string, error, nil:
+	}
+
+	// Invalid narrowing: *MyError without error
+	switch x.(type) { // want "non-exhaustive type switch. missing cases: error"
+	case *MyError:
+	case string, nil:
+	}
+
+	// Shadowed case: error before *MyError
+	switch x.(type) {
+	case string, error, nil:
+	case *MyError: // want "shadowed type switch case: \\*typeset.MyError is already covered by error"
+	}
+
+	// Redundant default in exhaustive switch
+	switch x.(type) {
+	case string, error, nil:
+	default: // want "redundant default case in exhaustive type switch"
+	}
 }
 
 // --- Nested sum types and subset assignability (#10) ---
@@ -100,10 +141,14 @@ func testNestedSum() {
 	a = "not an int" // want "invalid assigning: type is not permitted"
 
 	switch a.(type) {
-	case SmallInt, int32, int64, nil:
+	case int8, int16, int32, int64, nil:
 	}
 
 	switch a.(type) { // want "non-exhaustive type switch. missing cases: nil"
-	case SmallInt, int32, int64:
+	case int8, int16, int32, int64:
+	}
+
+	switch a.(type) { // want "non-exhaustive type switch. missing cases: int8, int16"
+	case SmallInt, int32, int64, nil: // want "invalid type switch case: typeset.SmallInt"
 	}
 }

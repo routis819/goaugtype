@@ -58,6 +58,13 @@ func testAssign() {
 	_ = Tree(NotTree{}) // want "invalid type conversion: type is not permitted"
 	_ = Tree(123)       // want "invalid type conversion: type is not permitted"
 
+	// Type assertions (Issue #7)
+	_ = trees[0].(*Leaf)
+	_ = trees[0].(NotTree) // want "invalid type assertion from sum type: type is not permitted"
+
+	var anyVal any = &Leaf{}
+	_ = anyVal.(Tree) // want "invalid type assertion to sum type: type is not permitted"
+
 	// Type switch on complex target expressions (Issue #8)
 	switch trees[0].(type) { // want "non-exhaustive type switch. missing cases: nil"
 	case *Leaf:
