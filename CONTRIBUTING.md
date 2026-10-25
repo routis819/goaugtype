@@ -41,10 +41,10 @@ goaugtype/
 │       ├── testdata/gotypes/   # 100% byte-for-byte unmodified snapshots of src/go/types
 │       └── patches/            # Unified diff (.patch) files for each ported file
 ├── scripts/
-│   ├── check-upstream.sh       # 4-way consistency and patch drift verification
+│   ├── check-upstream.sh       # 5-way consistency and patch drift verification
 │   ├── apply-patches.sh        # Regenerates pkg/analyzer/*.go from snapshots + patches
 │   ├── update-patches.sh       # Regenerates patches from local edits in pkg/analyzer/
-│   ├── sync-upstream.sh        # Syncs snapshots with new Go releases & applies 3-way merge
+│   ├── sync-upstream.sh        # Syncs snapshots with go.mod Go version & applies 3-way merge
 │   └── release.sh              # Release gatekeeper pipeline (--check-only or <tag>)
 ├── docs/                       # Specifications, architecture, and diagrams
 ├── upstream.json               # Tracks base_revision and SHA-256 hashes of snapshots
@@ -112,7 +112,7 @@ When adding features or fixing bugs in any of the 7 ported files:
    ```bash
    ./scripts/update-patches.sh
    ```
-4. **Verify 4-way consistency and patch drift**:
+4. **Verify 5-way consistency and patch drift**:
    ```bash
    ./scripts/check-upstream.sh -target local
    ```
@@ -123,7 +123,7 @@ When adding features or fixing bugs in any of the 7 ported files:
 
 ### 4. Synchronizing with a New Upstream Go Release
 
-**Principle**: The `go` version directive in [`go.mod`](./go.mod) is the canonical source of truth. `UpstreamBaseRevision` in [`pkg/analyzer/adt.go`](./pkg/analyzer/adt.go) and `base_revision` in [`upstream.json`](./upstream.json) must always follow the Go version declared in `go.mod` (`"go" + <go.mod version>`).
+**Principle**: The `go` version directive in [`go.mod`](./go.mod) is the canonical single source of truth. `UpstreamBaseRevision` in [`pkg/analyzer/adt.go`](./pkg/analyzer/adt.go) and `base_revision` in [`upstream.json`](./upstream.json) must always match the Go version declared in `go.mod` (`"go" + <go.mod version>`).
 
 When upgrading the project's Go version in `go.mod` (e.g., to `1.28.0`):
 
@@ -135,12 +135,13 @@ When upgrading the project's Go version in `go.mod` (e.g., to `1.28.0`):
    ```go
    const UpstreamBaseRevision = "go1.28.0"
    ```
-3. **Synchronize snapshots and apply 3-way merge**:
+3. **Synchronize snapshots and apply 3-way merge** (without needing `-target`, as it automatically resolves from `go.mod`):
    ```bash
-   ./scripts/sync-upstream.sh -target go1.28.0
+   ./scripts/sync-upstream.sh
    ```
    This command:
-   - Fetches the new upstream files from `golang/go` matching `go1.28.0`.
+   - Reads the target Go version directly from `go.mod` (`go1.28.0`).
+   - Fetches the new upstream files from `golang/go`.
    - Updates `internal/upstream/testdata/gotypes/*.go`.
    - Computes new SHA-256 hashes in `upstream.json`.
    - Applies existing patches via `git apply --3way`.

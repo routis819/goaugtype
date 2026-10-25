@@ -11,7 +11,7 @@ For detailed language specifications and rationale aligned with [golang/go#57644
 `goaugtype` is structured into three primary layers:
 1. **CLI & Driver Layer (`cmd/goaugadt`)**: Wraps the analyzer with `golang.org/x/tools/go/analysis/singlechecker` for standalone CLI execution and standard linter integration.
 2. **Core Analysis Engine (`pkg/analyzer`)**: Implements the two-pass AST/type-set static analyzer ([`adt.go`](../pkg/analyzer/adt.go), [`check.go`](../pkg/analyzer/check.go), and the 7 `go/types`-ported files [`typeterm.go`](../pkg/analyzer/typeterm.go), [`termlist.go`](../pkg/analyzer/termlist.go), [`typeset.go`](../pkg/analyzer/typeset.go), [`union.go`](../pkg/analyzer/union.go), [`instantiate.go`](../pkg/analyzer/instantiate.go), [`operand.go`](../pkg/analyzer/operand.go), and [`assignments.go`](../pkg/analyzer/assignments.go)).
-3. **Upstream Synchronization, Patch Pipeline & Release Gatekeeper (`cmd/upstreamchecker`, `internal/upstream/`, `scripts/`, `upstream.json`)**: Keeps pristine `src/go/types` snapshots in `internal/upstream/testdata/gotypes/`, applies unified diffs from `internal/upstream/patches/` via `go generate ./...` or `./scripts/apply-patches.sh`, and enforces drift-free synchronization across Go releases.
+3. **Upstream Synchronization, Patch Pipeline & Release Gatekeeper (`cmd/upstreamchecker`, `internal/upstream/`, `scripts/`, `upstream.json`)**: Keeps pristine `src/go/types` snapshots in `internal/upstream/testdata/gotypes/`, applies unified diffs from `internal/upstream/patches/` via `go generate ./...` or `./scripts/apply-patches.sh`, and enforces 5-way drift-free synchronization across Go releases (`go.mod` ↔ `UpstreamBaseRevision` ↔ `upstream.json` ↔ local snapshots + patches ↔ upstream `golang/go`).
 
 ![Architecture Topology](./diagrams/architecture-topology.svg)
 *Source: [`docs/diagrams/architecture-topology.d2`](./docs/diagrams/architecture-topology.d2)*
@@ -270,7 +270,7 @@ sequenceDiagram
 
 ## 7. Upstream `go/types` Synchronization, Patch Pipeline & Release Gatekeeper
 
-To keep the 7 ported `go/types` files maintainable and verifiable, `goaugtype` stores unmodified upstream snapshots in [`internal/upstream/testdata/gotypes/`](../internal/upstream/testdata/gotypes) and unified diff patches in [`internal/upstream/patches/`](../internal/upstream/patches). `cmd/upstreamchecker`, `scripts/*.sh`, and `scripts/release.sh` enforce a 4-way consistency check (code constant ↔ `upstream.json` ↔ local pristine snapshots + patches ↔ latest upstream Go release):
+To keep the 7 ported `go/types` files maintainable and verifiable, `goaugtype` stores unmodified upstream snapshots in [`internal/upstream/testdata/gotypes/`](../internal/upstream/testdata/gotypes) and unified diff patches in [`internal/upstream/patches/`](../internal/upstream/patches). `go.mod` serves as the canonical single source of truth for the target Go version. `cmd/upstreamchecker`, `scripts/*.sh`, and `scripts/release.sh` enforce a 5-way consistency check (`go.mod` ↔ `UpstreamBaseRevision` constant ↔ `upstream.json` ↔ local pristine snapshots + patches ↔ upstream `golang/go` release):
 
 | Upstream `golang/go` Source | Pristine Snapshot | Patch File | Ported `pkg/analyzer` Target | Purpose |
 | :--- | :--- | :--- | :--- | :--- |
@@ -285,6 +285,7 @@ To keep the 7 ported `go/types` files maintainable and verifiable, `goaugtype` s
 ```mermaid
 flowchart LR
     subgraph Repo["goaugtype Repository"]
+        GoMod["go.mod<br/>canonical Go version"]
         AdtConst["pkg/analyzer/adt.go<br/>UpstreamBaseRevision + //go:generate"]
         Snapshots["internal/upstream/testdata/gotypes/<br/>7 Pristine go/types Files"]
         Patches["internal/upstream/patches/<br/>7 Unified Diff (.patch) Files"]
@@ -294,16 +295,18 @@ flowchart LR
     end
 
     subgraph Upstream["golang/go (GitHub / Local GOROOT)"]
-        Tags["GitHub Tags API<br/>Latest Official Release (go1.x.y)"]
+        Tags["Target Release Tag / GOROOT<br/>(matching go.mod)"]
         Files["src/go/types/<br/>{typeset,termlist,typeterm,union,<br/>instantiate,assignments,operand}.go"]
     end
 
     Snapshots -->|"git apply --3way<br/>(go generate / apply-patches.sh)"| Ported
     Patches -->|"git apply --3way"| Ported
     Ported -. "git diff --no-index<br/>(update-patches.sh)" .-> Patches
-    ReleaseSh -->|"1. Verify clean tree & patch drift"| Ported
+    ReleaseSh -->|"1. Verify clean tree, 5-way consistency & patch drift"| Ported
+    GoMod <-->|"Must equal"| AdtConst
+    GoMod <-->|"Must equal"| Config
     AdtConst <-->|"Must equal"| Config
     Snapshots <-->|"SHA-256 must equal"| Config
-    Config <-->|"Must equal latest tag & SHA-256"| Files
-    ReleaseSh -->|"2. Check latest Go release"| Tags
+    Config <-->|"Must equal target tag & SHA-256"| Files
+    ReleaseSh -->|"2. Check upstream target tag"| Tags
 ```

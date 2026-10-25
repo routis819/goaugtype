@@ -41,10 +41,10 @@ goaugtype/
 │       ├── testdata/gotypes/   # src/go/types 원본 100% 무수정 스냅샷 (바이트 단위 일치)
 │       └── patches/            # 각 포팅 파일에 대한 Unified Diff (.patch) 파일
 ├── scripts/
-│   ├── check-upstream.sh       # 4중 무결성 및 패치 드리프트 검증 스크립트
+│   ├── check-upstream.sh       # 5중 무결성 및 패치 드리프트 검증 스크립트
 │   ├── apply-patches.sh        # 원본 스냅샷 + 패치로부터 pkg/analyzer/*.go 재생성
 │   ├── update-patches.sh       # pkg/analyzer/ 로컬 변경사항으로부터 패치 역생성
-│   ├── sync-upstream.sh        # 새 Go 릴리즈와 스냅샷 동기화 및 3-way 병합
+│   ├── sync-upstream.sh        # go.mod 버전과 스냅샷 동기화 및 3-way 병합
 │   └── release.sh              # 릴리즈 게이트키퍼 파이프라인 (--check-only 또는 <tag>)
 ├── docs/                       # 설계 명세서, 아키텍처 문서 및 다이어그램
 ├── upstream.json               # base_revision 및 원본 파일 SHA-256 해시 추적 설정
@@ -112,7 +112,7 @@ go generate ./...
    ```bash
    ./scripts/update-patches.sh
    ```
-4. **4중 무결성 및 패치 드리프트를 검증**합니다:
+4. **5중 무결성 및 패치 드리프트를 검증**합니다:
    ```bash
    ./scripts/check-upstream.sh -target local
    ```
@@ -135,12 +135,13 @@ go generate ./...
    ```go
    const UpstreamBaseRevision = "go1.28.0"
    ```
-3. **스냅샷 동기화 및 3-way 병합을 수행**합니다:
+3. **스냅샷 동기화 및 3-way 병합을 수행**합니다 (`-target`을 생략해도 `go.mod` 버전을 자동으로 인식합니다):
    ```bash
-   ./scripts/sync-upstream.sh -target go1.28.0
+   ./scripts/sync-upstream.sh
    ```
    이 스크립트는 다음 작업을 순차적으로 수행합니다:
-   - `golang/go` 원격 저장소에서 `go1.28.0` 원본 파일을 가져옵니다.
+   - `go.mod`에서 대상 Go 버전(`go1.28.0`)을 직접 읽어옵니다.
+   - `golang/go` 원격 저장소에서 새 원본 파일을 가져옵니다.
    - `internal/upstream/testdata/gotypes/*.go` 스냅샷을 갱신합니다.
    - `upstream.json` 내 새 SHA-256 해시를 기록합니다.
    - 기존 패치 파일들을 `git apply --3way`로 자동 적용합니다.
