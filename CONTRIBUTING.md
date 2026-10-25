@@ -47,7 +47,7 @@ goaugtype/
 │   ├── sync-upstream.sh        # Syncs snapshots with go.mod Go version & applies 3-way merge
 │   └── release.sh              # Release gatekeeper pipeline (--check-only or <tag>)
 ├── docs/                       # Specifications, architecture, and diagrams
-├── upstream.json               # Tracks base_revision and SHA-256 hashes of snapshots
+├── upstream.json               # Declarative mapping (dirs, base_revision, files[] with SHA-256)
 └── go.mod
 ```
 

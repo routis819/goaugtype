@@ -11,7 +11,7 @@ Usage: $(basename "$0") [flags]
 Verifies 5-way upstream consistency between:
   1. go version directive in go.mod
   2. analyzer.UpstreamBaseRevision in pkg/analyzer/adt.go
-  3. base_revision and file_hashes in upstream.json
+  3. base_revision and files[].sha256 in upstream.json
   4. internal/upstream/testdata/gotypes/*.go and internal/upstream/patches/*.patch drift check
   5. Target revision (default: go version from go.mod; 'latest' for latest GitHub release; 'local' for GOROOT; or explicit tag/commit)
 
