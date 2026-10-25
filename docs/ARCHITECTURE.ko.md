@@ -11,8 +11,8 @@
 `goaugtype`은 크게 3개의 계층으로 구성됩니다:
 
 1. **CLI 및 드라이버 계층 (`cmd/goaugadt`)**: `golang.org/x/tools/go/analysis/singlechecker`를 통해 독립 실행형 린터 CLI 및 외부 린터 연동을 제공합니다.
-2. **코어 정적 분석 엔진 (`pkg/analyzer`)**: AST/주석 수집, `SumTypeSet` 타입 셋 구성, 8가지 할당/변환/단언 경로 및 `type switch` 완전성 검증을 수행합니다 ([`adt.go`](../pkg/analyzer/adt.go), [`check.go`](../pkg/analyzer/check.go)).
-3. **업스트림 추적 및 릴리즈 게이트키퍼 (`cmd/upstreamchecker`, `scripts/`, `upstream.json`)**: `SumTypeSet` 엔진의 참조 원본인 Go 표준 라이브러리 `src/go/types` 코드의 변경 여부를 감시하고 릴리즈 무결성을 강제합니다.
+2. **코어 정적 분석 엔진 (`pkg/analyzer`)**: AST/주석 수집, `SumTypeSet` 타입 셋 구성, 8가지 할당/변환/단언 경로 및 `type switch` 완전성 검증을 수행합니다 ([`adt.go`](../pkg/analyzer/adt.go), [`check.go`](../pkg/analyzer/check.go) 및 `go/types`에서 직접 포팅된 [`typeterm.go`](../pkg/analyzer/typeterm.go), [`termlist.go`](../pkg/analyzer/termlist.go), [`typeset.go`](../pkg/analyzer/typeset.go), [`assignments.go`](../pkg/analyzer/assignments.go)).
+3. **업스트림 추적 및 릴리즈 게이트키퍼 (`cmd/upstreamchecker`, `scripts/`, `upstream.json`)**: `SumTypeSet` 및 대입 검증 엔진의 참조 원본인 Go 표준 라이브러리 `src/go/types` 7개 파일의 변경 여부를 감시하고 릴리즈 무결성을 강제합니다.
 
 ![Architecture Topology](./diagrams/architecture-topology.svg)
 *원본 소스: [`docs/diagrams/architecture-topology.d2`](./diagrams/architecture-topology.d2)*
@@ -30,8 +30,8 @@ flowchart TB
         Entry["Analyzer.Run (run)<br/>check.go"]
         Collector["Pass 1: AST 및 지시자 수집기<br/>(collectInfo / inspector)"]
         Builder["Pass 2: 레지스트리 및 TypeSet 빌더<br/>(BuildRegistry)"]
-        Registry["Registry & SumTypeSet<br/>adt.go"]
-        Checker["Pass 3: 8대 경로 및 Switch 검증기<br/>(check)"]
+        Registry["Registry & SumTypeSet<br/>adt.go + {typeterm,termlist,typeset}.go"]
+        Checker["Pass 3: 8대 경로 및 Switch 검증기<br/>check.go + assignments.go"]
         Facts["SumTypeFact<br/>(analysis.Fact Gob 직렬화)"]
     end
 
@@ -271,24 +271,36 @@ sequenceDiagram
 
 ## 7. 업스트림(`go/types`) 동기화 및 릴리즈 게이트키퍼
 
-`SumTypeSet` 구현이 참조한 업스트림 `golang/go`의 `src/go/types` 코드 변경을 자동 추적하고, 릴리즈 태그 생성 시점에 **코드 상수 ↔ `upstream.json` ↔ 최신 Go 정식 릴리즈**의 3중 일치를 강제합니다:
+포팅된 `go/types` 엔진 파일들이 참조한 업스트림 `golang/go`의 `src/go/types` 7개 원본 파일 변경을 자동 추적하고, 릴리즈 태그 생성 시점에 **코드 상수 ↔ `upstream.json` ↔ 최신 Go 정식 릴리즈**의 3중 일치를 강제합니다:
+
+| 업스트림 `golang/go` 원본 | 포팅된 `pkg/analyzer` 대상 | 주요 역할 |
+| :--- | :--- | :--- |
+| `src/go/types/typeterm.go` | [`pkg/analyzer/typeterm.go`](../pkg/analyzer/typeterm.go) | 단일 타입 항 집합 연산 (`includes`, `subsetOf`, `disjoint`, `union`, `intersect`) 및 일반 인터페이스 항 지원 |
+| `src/go/types/termlist.go` | [`pkg/analyzer/termlist.go`](../pkg/analyzer/termlist.go) | 정규화된 항 리스트 집합 대수 (`norm`, `includes`, `supersetOf`, `subsetOf`) |
+| `src/go/types/typeset.go` | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `_TypeSet` 구조체, 메서드 셋 조회 및 `computeInterfaceTypeSet` |
+| `src/go/types/union.go` | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | 유니온 항 파싱(`parseTilde`), 쌍별 서로소 검사(`overlappingTerm`), 중첩 합타입 평탄화(`computeUnionTypeSet`) |
+| `src/go/types/instantiate.go` | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `implements` 검증 (합타입 메서드 셋 구현 + `_TypeSet` 포함/부분집합 판정) |
+| `src/go/types/operand.go` | [`pkg/analyzer/assignments.go`](../pkg/analyzer/assignments.go) | `operand` 표현 및 `Registry` 합타입 후킹이 적용된 `assignableTo` |
+| `src/go/types/assignments.go` | [`pkg/analyzer/assignments.go`](../pkg/analyzer/assignments.go) | 1:1 및 다중 반환 튜플(`unpackRecv`) 대입 검증 (`initVars`, `assignVars`, `returnVars`) |
 
 ```mermaid
 flowchart LR
     subgraph Repo["goaugtype 레포지토리"]
         AdtConst["pkg/analyzer/adt.go<br/>UpstreamBaseRevision 상수"]
-        Config["upstream.json<br/>base_revision + file_hashes"]
+        Ported["pkg/analyzer/<br/>{typeterm,termlist,typeset,assignments}.go"]
+        Config["upstream.json<br/>base_revision + 7개 file_hashes"]
         ReleaseSh["scripts/release.sh"]
     end
 
     subgraph Upstream["golang/go (GitHub / 로컬 GOROOT)"]
         Tags["GitHub Tags API<br/>최신 정식 릴리즈 태그 (go1.x.y)"]
-        Files["src/go/types/<br/>{typeset,termlist,typeterm,union,instantiate}.go"]
+        Files["src/go/types/<br/>{typeset,termlist,typeterm,union,<br/>instantiate,assignments,operand}.go"]
     end
 
     ReleaseSh -->|"1. 워킹 트리 클린 확인"| Repo
     ReleaseSh -->|"2. base_revision 무결성 검증"| Config
     AdtConst <-->|"반드시 일치"| Config
+    Ported -. "원본 포팅" .-> Files
     ReleaseSh -->|"3. 최신 Go 정식 릴리즈 대조"| Tags
     Config <-->|"최신 태그 및 SHA-256 일치"| Files
     ReleaseSh -->|"4. go test -v ./..."| Repo
