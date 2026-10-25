@@ -123,26 +123,32 @@ When adding features or fixing bugs in any of the 7 ported files:
 
 ### 4. Synchronizing with a New Upstream Go Release
 
-When a new official Go minor or patch version is released (e.g., `go1.28.0`):
+**Principle**: The `go` version directive in [`go.mod`](./go.mod) is the canonical source of truth. `UpstreamBaseRevision` in [`pkg/analyzer/adt.go`](./pkg/analyzer/adt.go) and `base_revision` in [`upstream.json`](./upstream.json) must always follow the Go version declared in `go.mod` (`"go" + <go.mod version>`).
 
-1. **Update `UpstreamBaseRevision`** in [`pkg/analyzer/adt.go`](./pkg/analyzer/adt.go):
+When upgrading the project's Go version in `go.mod` (e.g., to `1.28.0`):
+
+1. **Update the `go` version in [`go.mod`](./go.mod)**:
+   ```go
+   go 1.28.0
+   ```
+2. **Align `UpstreamBaseRevision` with `go.mod`** in [`pkg/analyzer/adt.go`](./pkg/analyzer/adt.go):
    ```go
    const UpstreamBaseRevision = "go1.28.0"
    ```
-2. **Synchronize snapshots and apply 3-way merge**:
+3. **Synchronize snapshots and apply 3-way merge**:
    ```bash
    ./scripts/sync-upstream.sh -target go1.28.0
    ```
    This command:
-   - Fetches the new upstream files from `golang/go`.
+   - Fetches the new upstream files from `golang/go` matching `go1.28.0`.
    - Updates `internal/upstream/testdata/gotypes/*.go`.
    - Computes new SHA-256 hashes in `upstream.json`.
    - Applies existing patches via `git apply --3way`.
-3. **Refresh patches** if line offsets shifted:
+4. **Refresh patches** if line offsets shifted:
    ```bash
    ./scripts/update-patches.sh
    ```
-4. **Verify everything passes**:
+5. **Verify everything passes**:
    ```bash
    ./scripts/release.sh --check-only
    ```
@@ -166,10 +172,11 @@ git push origin v0.3.0
 
 ## Engineering Guidelines
 
-1. **Maintain Minimal Diff**: When modifying ported files, keep diffs against upstream minimal. Mark all custom code with `// [goaugtype]`.
-2. **Preserve Disjoint Union Invariant**: Every sum type must strictly enforce pairwise disjointness across all flattened terms. Never allow `any` or subtype collisions ($C \subset I$, $I_1 \subseteq I_2$) in sum types.
-3. **Verify with `gopls`**: Ensure zero diagnostics across all packages prior to submitting pull requests.
-4. **Always Update Patches**: Never commit modifications to `pkg/analyzer/{typeterm,termlist,typeset,union,instantiate,operand,assignments}.go` without running `./scripts/update-patches.sh` and committing the resulting `internal/upstream/patches/*.patch` files.
+1. **Align `UpstreamBaseRevision` with `go.mod`**: `UpstreamBaseRevision` in [`pkg/analyzer/adt.go`](./pkg/analyzer/adt.go) and `base_revision` in [`upstream.json`](./upstream.json) must always match the `go` version specified in [`go.mod`](./go.mod) (e.g., `go 1.27.3` → `UpstreamBaseRevision = "go1.27.3"`).
+2. **Maintain Minimal Diff**: When modifying ported files, keep diffs against upstream minimal. Mark all custom code with `// [goaugtype]`.
+3. **Preserve Disjoint Union Invariant**: Every sum type must strictly enforce pairwise disjointness across all flattened terms. Never allow `any` or subtype collisions ($C \subset I$, $I_1 \subseteq I_2$) in sum types.
+4. **Verify with `gopls`**: Ensure zero diagnostics across all packages prior to submitting pull requests.
+5. **Always Update Patches**: Never commit modifications to `pkg/analyzer/{typeterm,termlist,typeset,union,instantiate,operand,assignments}.go` without running `./scripts/update-patches.sh` and committing the resulting `internal/upstream/patches/*.patch` files.
 
 ---
 

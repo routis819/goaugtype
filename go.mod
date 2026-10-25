@@ -1,6 +1,6 @@
 module github.com/routiz/goaugt
 
-go 1.24.7
+go 1.27.3
 
 require golang.org/x/tools v0.37.0
 
