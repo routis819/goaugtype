@@ -10,12 +10,17 @@ usage() {
 Usage:
   $0 <tag>          Create an annotated release tag (e.g. v0.3.0) after running verification
   $0 --check-only   Run release verification checks without tagging
+  $0 -h, --help     Show this help message
 EOF
-  exit 1
+  exit "${1:-1}"
 }
 
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+  usage 0
+fi
+
 if [[ $# -lt 1 ]]; then
-  usage
+  usage 1
 fi
 
 CHECK_ONLY=false

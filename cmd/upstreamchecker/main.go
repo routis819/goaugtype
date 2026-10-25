@@ -316,7 +316,7 @@ func verifyPatches(snapshotDir, patchesDir, portedDir string, trackedFiles []str
 		}
 
 		if computeSHA256Hex(patchedData) != computeSHA256Hex(portedData) {
-			drifts = append(drifts, fmt.Sprintf("[DRIFT] %s and %s are out of sync (run 'make update-patches' or 'make generate')", portedFile, patchFile))
+			drifts = append(drifts, fmt.Sprintf("[DRIFT] %s and %s are out of sync (run './scripts/update-patches.sh' or './scripts/apply-patches.sh')", portedFile, patchFile))
 		}
 	}
 
