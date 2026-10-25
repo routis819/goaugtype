@@ -446,49 +446,9 @@ func checkFuncBodyReturns(tinfo *types.Info, reg *Registry, sig *types.Signature
 		if _, ok := n.(*ast.FuncLit); ok {
 			return false
 		}
-		ret, ok := n.(*ast.ReturnStmt)
-		if !ok {
-			return true
+		if ret, ok := n.(*ast.ReturnStmt); ok {
+			errs = append(errs, returnVars(tinfo, reg, sig, ret)...)
 		}
-
-		if len(ret.Results) == 0 {
-			return true
-		}
-
-		if len(ret.Results) == sig.Results().Len() {
-			for i, resExpr := range ret.Results {
-				resType := sig.Results().At(i).Type()
-				if sumt := reg.Lookup(resType); sumt != nil {
-					if !sumt.IsPermittedValue(tinfo, reg, resExpr) {
-						errs = append(errs, augtError{
-							err: errors.New("invalid return: type is not permitted"),
-							pos: resExpr.Pos(),
-						})
-					}
-				}
-			}
-			return true
-		}
-
-		if len(ret.Results) == 1 && sig.Results().Len() > 1 {
-			rhsTV, ok := tinfo.Types[ret.Results[0]]
-			if ok && rhsTV.Type != nil {
-				if tuple, ok := rhsTV.Type.(*types.Tuple); ok {
-					for i := 0; i < sig.Results().Len() && i < tuple.Len(); i++ {
-						if sumt := reg.Lookup(sig.Results().At(i).Type()); sumt != nil {
-							if !sumt.IsPermittedType(reg, tuple.At(i).Type()) {
-								errs = append(errs, augtError{
-									err: errors.New("invalid return: type is not permitted"),
-									pos: ret.Results[0].Pos(),
-								})
-							}
-						}
-					}
-				}
-			}
-			return true
-		}
-
 		return true
 	})
 	return errs

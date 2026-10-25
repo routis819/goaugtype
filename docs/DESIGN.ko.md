@@ -123,18 +123,18 @@ Go의 인터페이스 유니온에서 각 항(Term)은 구체 타입일 수도 �
 
 Go 표준 라이브러리의 `go/types` 패키지(`typeset.go`, `termlist.go`, `typeterm.go`, `union.go`, `instantiate.go`, `operand.go`, `assignments.go`)에는 이미 타입 셋 연산, 유니온 중복 검사, `implements`, 그리고 변수 대입/다중 반환 튜플 분해 로직이 구현되어 있으며, `golang.org/x/tools/internal/typeparams/copytermlist.go` 역시 이를 복사·변형하여 사용하고 있습니다.
 
-#### 업스트림(`src/go/types`) ↔ `pkg/analyzer` 파일 1:1 매핑
-총 7개의 업스트림 원본 파일이 [`upstream.json`](../upstream.json)을 통해 해시 추적되며, 수정 지점은 코드 내에 `// [goaugtype]` 주석으로 명시되어 있습니다:
+#### 업스트림(`src/go/types`) ↔ 원본 스냅샷 ↔ 패치 ↔ `pkg/analyzer` 1:1 매핑
+총 7개의 업스트림 원본 파일이 [`internal/upstream/testdata/gotypes/`](../internal/upstream/testdata/gotypes)에 **100% 무수정 상태**로 보관되며, [`internal/upstream/patches/`](../internal/upstream/patches)의 Unified Diff 패치를 `go generate ./pkg/analyzer/...` (`make generate`)로 적용하여 [`pkg/analyzer/`](../pkg/analyzer) 내 7개 파일을 생성합니다:
 
-| 업스트림 `golang/go` 원본 파일 | 포팅된 `goaugtype` 파일 | 포팅된 주요 심볼 및 `[goaugtype]` 확장 내역 |
-| :--- | :--- | :--- |
-| `src/go/types/typeterm.go` | [`pkg/analyzer/typeterm.go`](../pkg/analyzer/typeterm.go) | `term`, `(*term).String`, `equal`, `union`, `intersect`, `includes`, `subsetOf`, `disjoint` — 비어 있지 않은 일반 인터페이스 항에 대해 `types.Implements` 판정 추가 (`#5`). |
-| `src/go/types/termlist.go` | [`pkg/analyzer/termlist.go`](../pkg/analyzer/termlist.go) | `termlist`, `allTermlist`, `String`, `isEmpty`, `isAll`, `norm`, `union`, `intersect`, `equal`, `includes`, `supersetOf`, `subsetOf` — 원본 알고리즘 100% 보존. |
-| `src/go/types/typeset.go` | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `_TypeSet`, `IsEmpty`, `IsAll`, `IsMethodSet`, `IsComparable`, `NumMethods`, `Method`, `LookupMethod`, `String`, `hasTerms`, `subsetOf`, `terms` (`computeInterfaceTypeSet`). |
-| `src/go/types/union.go` | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `parseTilde`(`~T` 및 `nil` 금지, `#9`), `overlappingTerm`(구체↔구체, 구체↔인터페이스, 인터페이스↔인터페이스 포함/중복 감지), `computeUnionTypeSet`(`Registry`를 통한 중첩 합타입 재귀 평탄화, `#10`). |
-| `src/go/types/instantiate.go` | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `implements` — 합타입 자체의 메서드 셋 구현 검증(`#9`) 및 타입 셋 포함/부분집합 판정(`tset.subsetOf` / `tset.includes`). |
-| `src/go/types/operand.go` | [`pkg/analyzer/assignments.go`](../pkg/analyzer/assignments.go) | `operandMode`, `operand`, `(*operand).assignableTo` — `Registry.Lookup(T)`를 후킹하여 `implements` 기반 합타입 대입 가능성 검증. |
-| `src/go/types/assignments.go` | [`pkg/analyzer/assignments.go`](../pkg/analyzer/assignments.go) | `assignment`, `initVar`, `assignVar`, `unpackRecv`, `initVars`, `assignVars`, `returnVars` — `var`, `=`, `:=`, `return`에서의 1:1 및 다중 반환 튜플(`CommaOk` / `()`) 분해 대입 검증. |
+| 업스트림 `golang/go` 원본 | 로컬 무수정 스냅샷 | 패치 파일 | 포팅/생성된 `pkg/analyzer` 파일 | 포팅된 주요 심볼 및 `[goaugtype]` 확장 내역 |
+| :--- | :--- | :--- | :--- | :--- |
+| `src/go/types/typeterm.go` | [`gotypes/typeterm.go`](../internal/upstream/testdata/gotypes/typeterm.go) | [`typeterm.patch`](../internal/upstream/patches/typeterm.patch) | [`pkg/analyzer/typeterm.go`](../pkg/analyzer/typeterm.go) | `term`, `(*term).String`, `equal`, `union`, `intersect`, `includes`, `subsetOf`, `disjoint` — 비어 있지 않은 일반 인터페이스 항에 대해 `types.Implements` 판정 추가 (`#5`). |
+| `src/go/types/termlist.go` | [`gotypes/termlist.go`](../internal/upstream/testdata/gotypes/termlist.go) | [`termlist.patch`](../internal/upstream/patches/termlist.patch) | [`pkg/analyzer/termlist.go`](../pkg/analyzer/termlist.go) | `termlist`, `allTermlist`, `String`, `isEmpty`, `isAll`, `norm`, `union`, `intersect`, `equal`, `includes`, `supersetOf`, `subsetOf` — 원본 알고리즘 100% 보존. |
+| `src/go/types/typeset.go` | [`gotypes/typeset.go`](../internal/upstream/testdata/gotypes/typeset.go) | [`typeset.patch`](../internal/upstream/patches/typeset.patch) | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `_TypeSet`, `IsEmpty`, `IsAll`, `IsMethodSet`, `IsComparable`, `NumMethods`, `Method`, `LookupMethod`, `String`, `hasTerms`, `subsetOf`, `terms` (`computeInterfaceTypeSet`). |
+| `src/go/types/union.go` | [`gotypes/union.go`](../internal/upstream/testdata/gotypes/union.go) | [`union.patch`](../internal/upstream/patches/union.patch) | [`pkg/analyzer/union.go`](../pkg/analyzer/union.go) | `parseTilde`(`~T` 및 `nil` 금지, `#9`), `overlappingTerm`(구체↔구체, 구체↔인터페이스, 인터페이스↔인터페이스 포함/중복 감지), `computeUnionTypeSet`(`Registry`를 통한 중첩 합타입 재귀 평탄화, `#10`). |
+| `src/go/types/instantiate.go` | [`gotypes/instantiate.go`](../internal/upstream/testdata/gotypes/instantiate.go) | [`instantiate.patch`](../internal/upstream/patches/instantiate.patch) | [`pkg/analyzer/instantiate.go`](../pkg/analyzer/instantiate.go) | `implements` — 합타입 자체의 메서드 셋 구현 검증(`#9`) 및 타입 셋 포함/부분집합 판정(`tset.subsetOf` / `tset.includes`). |
+| `src/go/types/operand.go` | [`gotypes/operand.go`](../internal/upstream/testdata/gotypes/operand.go) | [`operand.patch`](../internal/upstream/patches/operand.patch) | [`pkg/analyzer/operand.go`](../pkg/analyzer/operand.go) | `operandMode`, `operand`, `(*operand).assignableTo` — `Registry.Lookup(T)`를 후킹하여 `implements` 기반 합타입 대입 가능성 검증. |
+| `src/go/types/assignments.go` | [`gotypes/assignments.go`](../internal/upstream/testdata/gotypes/assignments.go) | [`assignments.patch`](../internal/upstream/patches/assignments.patch) | [`pkg/analyzer/assignments.go`](../pkg/analyzer/assignments.go) | `assignment`, `initVar`, `assignVar`, `unpackRecv`, `initVars`, `assignVars`, `returnVars` — `var`, `=`, `:=`, `return`에서의 1:1 및 다중 반환 튜플(`CommaOk` / `()`) 분해 대입 검증. |
 
 #### 왜 `types.Union`을 그대로 호출하지 않고 `go/types` 내부 구현을 포팅하는가?
 1. **메서드가 있는 인터페이스 항의 `allTermlist`(`𝓤`) 폭발 방지 (Issue #5 연계)**:
