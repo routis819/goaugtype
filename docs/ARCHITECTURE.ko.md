@@ -9,6 +9,7 @@
 ## 1. 시스템 컨텍스트 및 컴포넌트 토폴로지
 
 `goaugtype`은 크게 3개의 계층으로 구성됩니다:
+
 1. **CLI 및 드라이버 계층 (`cmd/goaugadt`)**: `golang.org/x/tools/go/analysis/singlechecker`를 통해 독립 실행형 린터 CLI 및 외부 린터 연동을 제공합니다.
 2. **코어 정적 분석 엔진 (`pkg/analyzer`)**: AST/주석 수집, `SumTypeSet` 타입 셋 구성, 8가지 할당/변환/단언 경로 및 `type switch` 완전성 검증을 수행합니다 ([`adt.go`](../pkg/analyzer/adt.go), [`check.go`](../pkg/analyzer/check.go)).
 3. **업스트림 추적 및 릴리즈 게이트키퍼 (`cmd/upstreamchecker`, `scripts/`, `upstream.json`)**: `SumTypeSet` 엔진의 참조 원본인 Go 표준 라이브러리 `src/go/types` 코드의 변경 여부를 감시하고 릴리즈 무결성을 강제합니다.
