@@ -13,6 +13,8 @@ import (
 
 // UpstreamBaseRevision specifies the golang/go release tag that the SumTypeSet
 // implementation in this package is synchronized with.
+//
+//go:generate go run ../../cmd/upstreamchecker -config ../../upstream.json -apply-patches
 const UpstreamBaseRevision = "go1.27.3"
 
 func getCanonicalName(t types.Type) string {

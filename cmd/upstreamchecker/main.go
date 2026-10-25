@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"go/version"
@@ -15,8 +16,6 @@ import (
 	"runtime"
 	"strings"
 	"time"
-
-	"github.com/routiz/goaugt/pkg/analyzer"
 )
 
 func getLocalGOROOT() (string, error) {
@@ -176,10 +175,198 @@ func saveConfig(path string, cfg *Config) error {
 	return nil
 }
 
+func updatePatches(snapshotDir, patchesDir, portedDir string, trackedFiles []string) error {
+	if err := os.MkdirAll(patchesDir, 0755); err != nil {
+		return fmt.Errorf("failed to create patches directory: %w", err)
+	}
+
+	for _, relPath := range trackedFiles {
+		base := filepath.Base(relPath)
+		stem := strings.TrimSuffix(base, ".go")
+		pristineFile := filepath.Join(snapshotDir, base)
+		portedFile := filepath.Join(portedDir, base)
+		patchFile := filepath.Join(patchesDir, stem+".patch")
+
+		cmd := exec.Command("git", "diff", "--no-index", "--src-prefix=a/", "--dst-prefix=b/", pristineFile, portedFile)
+		out, err := cmd.Output()
+		if err != nil {
+			if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
+				return fmt.Errorf("failed to diff %s and %s: %w", pristineFile, portedFile, err)
+			}
+		}
+
+		diffStr := string(out)
+		diffStr = strings.ReplaceAll(diffStr, "a/"+pristineFile, "a/"+base)
+		diffStr = strings.ReplaceAll(diffStr, "b/"+portedFile, "b/"+base)
+
+		if err := os.WriteFile(patchFile, []byte(diffStr), 0644); err != nil {
+			return fmt.Errorf("failed to write patch file %s: %w", patchFile, err)
+		}
+		fmt.Printf("Updated patch: %s\n", patchFile)
+	}
+	return nil
+}
+
+func applyPatches(snapshotDir, patchesDir, portedDir string, trackedFiles []string) error {
+	rootCmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	rootOut, err := rootCmd.Output()
+	var gitRoot string
+	if err == nil {
+		gitRoot = strings.TrimSpace(string(rootOut))
+	}
+
+	for _, relPath := range trackedFiles {
+		base := filepath.Base(relPath)
+		stem := strings.TrimSuffix(base, ".go")
+		pristineFile := filepath.Join(snapshotDir, base)
+		portedFile := filepath.Join(portedDir, base)
+		patchFile := filepath.Join(patchesDir, stem+".patch")
+
+		data, err := os.ReadFile(pristineFile)
+		if err != nil {
+			return fmt.Errorf("failed to read pristine snapshot %s: %w", pristineFile, err)
+		}
+		if err := os.WriteFile(portedFile, data, 0644); err != nil {
+			return fmt.Errorf("failed to write ported file %s: %w", portedFile, err)
+		}
+
+		absPatchFile, err := filepath.Abs(patchFile)
+		if err != nil {
+			return err
+		}
+
+		absPortedDir, err := filepath.Abs(portedDir)
+		if err != nil {
+			return err
+		}
+
+		var cmd *exec.Cmd
+		if gitRoot != "" {
+			relPorted, err := filepath.Rel(gitRoot, absPortedDir)
+			if err != nil {
+				return err
+			}
+			cmd = exec.Command("git", "apply", "--3way", "--directory="+relPorted, absPatchFile)
+			cmd.Dir = gitRoot
+		} else {
+			cmd = exec.Command("git", "apply", "--3way", absPatchFile)
+			cmd.Dir = absPortedDir
+		}
+
+		if out, err := cmd.CombinedOutput(); err != nil {
+			var cmd2 *exec.Cmd
+			if gitRoot != "" {
+				relPorted, _ := filepath.Rel(gitRoot, absPortedDir)
+				cmd2 = exec.Command("git", "apply", "--directory="+relPorted, absPatchFile)
+				cmd2.Dir = gitRoot
+			} else {
+				cmd2 = exec.Command("git", "apply", absPatchFile)
+				cmd2.Dir = absPortedDir
+			}
+			if out2, err2 := cmd2.CombinedOutput(); err2 != nil {
+				return fmt.Errorf("failed to apply patch %s to %s: %w\n%s\n%s", patchFile, portedFile, err2, string(out), string(out2))
+			}
+		}
+		fmt.Printf("Applied patch %s -> %s\n", patchFile, portedFile)
+	}
+	return nil
+}
+
+func verifyPatches(snapshotDir, patchesDir, portedDir string, trackedFiles []string) error {
+	tmpDir, err := os.MkdirTemp("", "goaugtype-patch-check-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	var drifts []string
+	for _, relPath := range trackedFiles {
+		base := filepath.Base(relPath)
+		stem := strings.TrimSuffix(base, ".go")
+		pristineFile := filepath.Join(snapshotDir, base)
+		portedFile := filepath.Join(portedDir, base)
+		patchFile := filepath.Join(patchesDir, stem+".patch")
+
+		data, err := os.ReadFile(pristineFile)
+		if err != nil {
+			return fmt.Errorf("failed to read pristine snapshot %s: %w", pristineFile, err)
+		}
+		tmpFile := filepath.Join(tmpDir, base)
+		if err := os.WriteFile(tmpFile, data, 0644); err != nil {
+			return fmt.Errorf("failed to write temp file %s: %w", tmpFile, err)
+		}
+
+		absPatchFile, err := filepath.Abs(patchFile)
+		if err != nil {
+			return err
+		}
+		cmd := exec.Command("git", "apply", absPatchFile)
+		cmd.Dir = tmpDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to apply patch %s in temp dir: %w\n%s", patchFile, err, string(out))
+		}
+
+		patchedData, err := os.ReadFile(tmpFile)
+		if err != nil {
+			return err
+		}
+		portedData, err := os.ReadFile(portedFile)
+		if err != nil {
+			return err
+		}
+
+		if computeSHA256Hex(patchedData) != computeSHA256Hex(portedData) {
+			drifts = append(drifts, fmt.Sprintf("[DRIFT] %s and %s are out of sync (run 'make update-patches' or 'make generate')", portedFile, patchFile))
+		}
+	}
+
+	if len(drifts) > 0 {
+		return errors.New(strings.Join(drifts, "\n"))
+	}
+	return nil
+}
+
+func verifySnapshots(snapshotDir string, cfg *Config) error {
+	for _, relPath := range cfg.TrackedFiles {
+		base := filepath.Base(relPath)
+		snapshotFile := filepath.Join(snapshotDir, base)
+		data, err := os.ReadFile(snapshotFile)
+		if err != nil {
+			return fmt.Errorf("missing snapshot file %s: %w", snapshotFile, err)
+		}
+		hash := computeSHA256Hex(data)
+		expected := cfg.FileHashes[relPath]
+		if hash != expected {
+			return fmt.Errorf("snapshot hash mismatch for %s: expected %s, got %s", base, expected, hash)
+		}
+	}
+	return nil
+}
+
+func getAnalyzerUpstreamBaseRevision(rootDir string) (string, error) {
+	adtFile := filepath.Join(rootDir, "pkg/analyzer/adt.go")
+	data, err := os.ReadFile(adtFile)
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "const UpstreamBaseRevision") {
+			parts := strings.Split(line, "=")
+			if len(parts) == 2 {
+				return strings.Trim(strings.TrimSpace(parts[1]), `"`), nil
+			}
+		}
+	}
+	return "", fmt.Errorf("UpstreamBaseRevision not found in %s", adtFile)
+}
+
 func main() {
 	configPath := flag.String("config", "upstream.json", "path to config file")
 	targetFlag := flag.String("target", "", "target revision to compare against (empty for latest release tag, 'local' for GOROOT, or explicit tag/branch/commit)")
 	updateFlag := flag.Bool("update", false, "update base_revision and file_hashes in config file with target values")
+	applyPatchesFlag := flag.Bool("apply-patches", false, "apply upstream patches to pkg/analyzer")
+	updatePatchesFlag := flag.Bool("update-patches", false, "generate/update upstream patches from pkg/analyzer")
 	flag.Parse()
 
 	cfg, err := loadConfig(*configPath)
@@ -193,9 +380,50 @@ func main() {
 		os.Exit(1)
 	}
 
+	rootDir := filepath.Dir(*configPath)
+	if rootDir == "" {
+		rootDir = "."
+	}
+	snapshotDir := filepath.Join(rootDir, "internal/upstream/testdata/gotypes")
+	patchesDir := filepath.Join(rootDir, "internal/upstream/patches")
+	portedDir := filepath.Join(rootDir, "pkg/analyzer")
+
+	if *updatePatchesFlag {
+		if err := updatePatches(snapshotDir, patchesDir, portedDir, cfg.TrackedFiles); err != nil {
+			fmt.Fprintf(os.Stderr, "Error updating patches: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Successfully updated %d patches in %s.\n", len(cfg.TrackedFiles), patchesDir)
+		os.Exit(0)
+	}
+
+	if *applyPatchesFlag {
+		if err := applyPatches(snapshotDir, patchesDir, portedDir, cfg.TrackedFiles); err != nil {
+			fmt.Fprintf(os.Stderr, "Error applying patches: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Successfully applied %d patches to %s.\n", len(cfg.TrackedFiles), portedDir)
+		os.Exit(0)
+	}
+
 	if !*updateFlag {
-		if cfg.BaseRevision != analyzer.UpstreamBaseRevision {
-			fmt.Fprintf(os.Stderr, "implementation mismatch: upstream.json base_revision (%s) != analyzer.UpstreamBaseRevision (%s)\n", cfg.BaseRevision, analyzer.UpstreamBaseRevision)
+		adtBaseRevision, err := getAnalyzerUpstreamBaseRevision(rootDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error checking UpstreamBaseRevision: %v\n", err)
+			os.Exit(1)
+		}
+		if cfg.BaseRevision != adtBaseRevision {
+			fmt.Fprintf(os.Stderr, "implementation mismatch: upstream.json base_revision (%s) != analyzer.UpstreamBaseRevision (%s)\n", cfg.BaseRevision, adtBaseRevision)
+			os.Exit(1)
+		}
+
+		if err := verifySnapshots(snapshotDir, cfg); err != nil {
+			fmt.Fprintf(os.Stderr, "Snapshot check failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		if err := verifyPatches(snapshotDir, patchesDir, portedDir, cfg.TrackedFiles); err != nil {
+			fmt.Fprintf(os.Stderr, "Patch check failed:\n%v\n", err)
 			os.Exit(1)
 		}
 	}
@@ -222,6 +450,7 @@ func main() {
 
 	client := &http.Client{Timeout: 30 * time.Second}
 	targetHashes := make(map[string]string)
+	fetchedData := make(map[string][]byte)
 
 	for _, file := range cfg.TrackedFiles {
 		data, err := getTrackedFileContent(cfg.UpstreamRepo, targetRevision, file, isLocal, client)
@@ -230,9 +459,20 @@ func main() {
 			os.Exit(1)
 		}
 		targetHashes[file] = computeSHA256Hex(data)
+		fetchedData[file] = data
 	}
 
 	if *updateFlag {
+		for _, file := range cfg.TrackedFiles {
+			base := filepath.Base(file)
+			snapshotFile := filepath.Join(snapshotDir, base)
+			data := fetchedData[file]
+			if err := os.WriteFile(snapshotFile, data, 0644); err != nil {
+				fmt.Fprintf(os.Stderr, "Error writing snapshot file %s: %v\n", snapshotFile, err)
+				os.Exit(1)
+			}
+		}
+
 		cfg.BaseRevision = targetRevision
 		cfg.FileHashes = targetHashes
 		if err := saveConfig(*configPath, cfg); err != nil {
@@ -240,6 +480,11 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Printf("Updated %s: base_revision=%s with %d tracked file hashes.\n", *configPath, cfg.BaseRevision, len(targetHashes))
+
+		if err := applyPatches(snapshotDir, patchesDir, portedDir, cfg.TrackedFiles); err != nil {
+			fmt.Fprintf(os.Stderr, "Error applying patches after update: %v\n", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
