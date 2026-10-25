@@ -291,7 +291,7 @@ flowchart LR
         Snapshots["internal/upstream/testdata/gotypes/<br/>무수정 원본 스냅샷 7개"]
         Patches["internal/upstream/patches/<br/>Unified Diff (.patch) 7개"]
         Ported["pkg/analyzer/<br/>{typeterm,termlist,typeset,union,<br/>instantiate,operand,assignments}.go"]
-        Config["upstream.json<br/>base_revision + 7개 file_hashes"]
+        Config["upstream.json<br/>base_revision, 디렉토리 경로 및 files[]"]
         ReleaseSh["scripts/*.sh 및 릴리즈 파이프라인"]
     end
 

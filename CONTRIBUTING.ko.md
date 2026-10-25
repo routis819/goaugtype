@@ -47,7 +47,7 @@ goaugtype/
 │   ├── sync-upstream.sh        # go.mod 버전과 스냅샷 동기화 및 3-way 병합
 │   └── release.sh              # 릴리즈 게이트키퍼 파이프라인 (--check-only 또는 <tag>)
 ├── docs/                       # 설계 명세서, 아키텍처 문서 및 다이어그램
-├── upstream.json               # base_revision 및 원본 파일 SHA-256 해시 추적 설정
+├── upstream.json               # 선언적 매핑 설정 (디렉토리, base_revision, files[] 및 SHA-256)
 └── go.mod
 ```
 
@@ -83,6 +83,7 @@ go test -v ./...
 ```
 
 특정 패키지만 실행하려면:
+
 ```bash
 go test -v ./pkg/analyzer
 ```
@@ -105,18 +106,22 @@ go generate ./...
 
 1. **대상 파일을 직접 수정**합니다 (`pkg/analyzer/<file>.go`).
 2. 변경된 코드 영역을 명확한 주석 헤더로 표기합니다:
+
    ```go
    // [goaugtype]: 합타입 커스텀 처리 로직...
    ```
 3. **패치 파일을 갱신**합니다:
+
    ```bash
    ./scripts/update-patches.sh
    ```
 4. **5중 무결성 및 패치 드리프트를 검증**합니다:
+
    ```bash
    ./scripts/check-upstream.sh -target local
    ```
 5. **테스트를 수행**합니다:
+
    ```bash
    go test -v ./...
    ```

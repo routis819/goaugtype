@@ -290,7 +290,7 @@ flowchart LR
         Snapshots["internal/upstream/testdata/gotypes/<br/>7 Pristine go/types Files"]
         Patches["internal/upstream/patches/<br/>7 Unified Diff (.patch) Files"]
         Ported["pkg/analyzer/<br/>{typeterm,termlist,typeset,union,<br/>instantiate,operand,assignments}.go"]
-        Config["upstream.json<br/>base_revision + 7 file_hashes"]
+        Config["upstream.json<br/>base_revision, directory paths & files[]"]
         ReleaseSh["scripts/*.sh & release pipeline"]
     end
 

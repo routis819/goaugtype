@@ -26,12 +26,23 @@ func getLocalGOROOT() (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// TrackedFile represents a single upstream file mapping.
+type TrackedFile struct {
+	Upstream string `json:"upstream"`
+	Snapshot string `json:"snapshot"`
+	Patch    string `json:"patch,omitempty"`
+	Target   string `json:"target,omitempty"`
+	SHA256   string `json:"sha256"`
+}
+
 // Config represents the schema for upstream.json.
 type Config struct {
-	UpstreamRepo string            `json:"upstream_repo"`
-	BaseRevision string            `json:"base_revision"`
-	TrackedFiles []string          `json:"tracked_files"`
-	FileHashes   map[string]string `json:"file_hashes"`
+	UpstreamRepo string        `json:"upstream_repo"`
+	BaseRevision string        `json:"base_revision"`
+	SnapshotDir  string        `json:"snapshot_dir"`
+	PatchDir     string        `json:"patch_dir"`
+	TargetDir    string        `json:"target_dir"`
+	Files        []TrackedFile `json:"files"`
 }
 
 func getGitHubToken() string {
@@ -157,8 +168,14 @@ func loadConfig(path string) (*Config, error) {
 	if cfg.UpstreamRepo == "" {
 		cfg.UpstreamRepo = "golang/go"
 	}
-	if cfg.FileHashes == nil {
-		cfg.FileHashes = make(map[string]string)
+	if cfg.SnapshotDir == "" {
+		cfg.SnapshotDir = "internal/upstream/testdata/gotypes"
+	}
+	if cfg.PatchDir == "" {
+		cfg.PatchDir = "internal/upstream/patches"
+	}
+	if cfg.TargetDir == "" {
+		cfg.TargetDir = "pkg/analyzer"
 	}
 	return &cfg, nil
 }
@@ -175,29 +192,30 @@ func saveConfig(path string, cfg *Config) error {
 	return nil
 }
 
-func updatePatches(snapshotDir, patchesDir, portedDir string, trackedFiles []string) error {
+func updatePatches(snapshotDir, patchesDir, targetDir string, files []TrackedFile) error {
 	if err := os.MkdirAll(patchesDir, 0755); err != nil {
 		return fmt.Errorf("failed to create patches directory: %w", err)
 	}
 
-	for _, relPath := range trackedFiles {
-		base := filepath.Base(relPath)
-		stem := strings.TrimSuffix(base, ".go")
-		pristineFile := filepath.Join(snapshotDir, base)
-		portedFile := filepath.Join(portedDir, base)
-		patchFile := filepath.Join(patchesDir, stem+".patch")
+	for _, f := range files {
+		if f.Patch == "" || f.Target == "" {
+			continue // snapshot-only file
+		}
+		pristineFile := filepath.Join(snapshotDir, f.Snapshot)
+		targetFile := filepath.Join(targetDir, f.Target)
+		patchFile := filepath.Join(patchesDir, f.Patch)
 
-		cmd := exec.Command("git", "diff", "--no-index", "--src-prefix=a/", "--dst-prefix=b/", pristineFile, portedFile)
+		cmd := exec.Command("git", "diff", "--no-index", "--src-prefix=a/", "--dst-prefix=b/", pristineFile, targetFile)
 		out, err := cmd.Output()
 		if err != nil {
 			if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 1 {
-				return fmt.Errorf("failed to diff %s and %s: %w", pristineFile, portedFile, err)
+				return fmt.Errorf("failed to diff %s and %s: %w", pristineFile, targetFile, err)
 			}
 		}
 
 		diffStr := string(out)
-		diffStr = strings.ReplaceAll(diffStr, "a/"+pristineFile, "a/"+base)
-		diffStr = strings.ReplaceAll(diffStr, "b/"+portedFile, "b/"+base)
+		diffStr = strings.ReplaceAll(diffStr, "a/"+pristineFile, "a/"+f.Target)
+		diffStr = strings.ReplaceAll(diffStr, "b/"+targetFile, "b/"+f.Target)
 
 		if err := os.WriteFile(patchFile, []byte(diffStr), 0644); err != nil {
 			return fmt.Errorf("failed to write patch file %s: %w", patchFile, err)
@@ -207,7 +225,7 @@ func updatePatches(snapshotDir, patchesDir, portedDir string, trackedFiles []str
 	return nil
 }
 
-func applyPatches(snapshotDir, patchesDir, portedDir string, trackedFiles []string) error {
+func applyPatches(snapshotDir, patchesDir, targetDir string, files []TrackedFile) error {
 	rootCmd := exec.Command("git", "rev-parse", "--show-toplevel")
 	rootOut, err := rootCmd.Output()
 	var gitRoot string
@@ -215,64 +233,69 @@ func applyPatches(snapshotDir, patchesDir, portedDir string, trackedFiles []stri
 		gitRoot = strings.TrimSpace(string(rootOut))
 	}
 
-	for _, relPath := range trackedFiles {
-		base := filepath.Base(relPath)
-		stem := strings.TrimSuffix(base, ".go")
-		pristineFile := filepath.Join(snapshotDir, base)
-		portedFile := filepath.Join(portedDir, base)
-		patchFile := filepath.Join(patchesDir, stem+".patch")
+	absTargetDir, err := filepath.Abs(targetDir)
+	if err != nil {
+		return err
+	}
+
+	for _, f := range files {
+		if f.Target == "" {
+			continue
+		}
+		pristineFile := filepath.Join(snapshotDir, f.Snapshot)
+		targetFile := filepath.Join(targetDir, f.Target)
 
 		data, err := os.ReadFile(pristineFile)
 		if err != nil {
 			return fmt.Errorf("failed to read pristine snapshot %s: %w", pristineFile, err)
 		}
-		if err := os.WriteFile(portedFile, data, 0644); err != nil {
-			return fmt.Errorf("failed to write ported file %s: %w", portedFile, err)
+		if err := os.WriteFile(targetFile, data, 0644); err != nil {
+			return fmt.Errorf("failed to write target file %s: %w", targetFile, err)
 		}
 
+		if f.Patch == "" {
+			continue // snapshot-only file copied to target without patches
+		}
+
+		patchFile := filepath.Join(patchesDir, f.Patch)
 		absPatchFile, err := filepath.Abs(patchFile)
-		if err != nil {
-			return err
-		}
-
-		absPortedDir, err := filepath.Abs(portedDir)
 		if err != nil {
 			return err
 		}
 
 		var cmd *exec.Cmd
 		if gitRoot != "" {
-			relPorted, err := filepath.Rel(gitRoot, absPortedDir)
+			relTarget, err := filepath.Rel(gitRoot, absTargetDir)
 			if err != nil {
 				return err
 			}
-			cmd = exec.Command("git", "apply", "--3way", "--directory="+relPorted, absPatchFile)
+			cmd = exec.Command("git", "apply", "--3way", "--directory="+relTarget, absPatchFile)
 			cmd.Dir = gitRoot
 		} else {
 			cmd = exec.Command("git", "apply", "--3way", absPatchFile)
-			cmd.Dir = absPortedDir
+			cmd.Dir = absTargetDir
 		}
 
 		if out, err := cmd.CombinedOutput(); err != nil {
 			var cmd2 *exec.Cmd
 			if gitRoot != "" {
-				relPorted, _ := filepath.Rel(gitRoot, absPortedDir)
-				cmd2 = exec.Command("git", "apply", "--directory="+relPorted, absPatchFile)
+				relTarget, _ := filepath.Rel(gitRoot, absTargetDir)
+				cmd2 = exec.Command("git", "apply", "--directory="+relTarget, absPatchFile)
 				cmd2.Dir = gitRoot
 			} else {
 				cmd2 = exec.Command("git", "apply", absPatchFile)
-				cmd2.Dir = absPortedDir
+				cmd2.Dir = absTargetDir
 			}
 			if out2, err2 := cmd2.CombinedOutput(); err2 != nil {
-				return fmt.Errorf("failed to apply patch %s to %s: %w\n%s\n%s", patchFile, portedFile, err2, string(out), string(out2))
+				return fmt.Errorf("failed to apply patch %s to %s: %w\n%s\n%s", patchFile, targetFile, err2, string(out), string(out2))
 			}
 		}
-		fmt.Printf("Applied patch %s -> %s\n", patchFile, portedFile)
+		fmt.Printf("Applied patch %s -> %s\n", patchFile, targetFile)
 	}
 	return nil
 }
 
-func verifyPatches(snapshotDir, patchesDir, portedDir string, trackedFiles []string) error {
+func verifyPatches(snapshotDir, patchesDir, targetDir string, files []TrackedFile) error {
 	tmpDir, err := os.MkdirTemp("", "goaugtype-patch-check-*")
 	if err != nil {
 		return err
@@ -280,18 +303,19 @@ func verifyPatches(snapshotDir, patchesDir, portedDir string, trackedFiles []str
 	defer os.RemoveAll(tmpDir)
 
 	var drifts []string
-	for _, relPath := range trackedFiles {
-		base := filepath.Base(relPath)
-		stem := strings.TrimSuffix(base, ".go")
-		pristineFile := filepath.Join(snapshotDir, base)
-		portedFile := filepath.Join(portedDir, base)
-		patchFile := filepath.Join(patchesDir, stem+".patch")
+	for _, f := range files {
+		if f.Patch == "" || f.Target == "" {
+			continue // snapshot-only file
+		}
+		pristineFile := filepath.Join(snapshotDir, f.Snapshot)
+		targetFile := filepath.Join(targetDir, f.Target)
+		patchFile := filepath.Join(patchesDir, f.Patch)
 
 		data, err := os.ReadFile(pristineFile)
 		if err != nil {
 			return fmt.Errorf("failed to read pristine snapshot %s: %w", pristineFile, err)
 		}
-		tmpFile := filepath.Join(tmpDir, base)
+		tmpFile := filepath.Join(tmpDir, f.Target)
 		if err := os.WriteFile(tmpFile, data, 0644); err != nil {
 			return fmt.Errorf("failed to write temp file %s: %w", tmpFile, err)
 		}
@@ -310,13 +334,13 @@ func verifyPatches(snapshotDir, patchesDir, portedDir string, trackedFiles []str
 		if err != nil {
 			return err
 		}
-		portedData, err := os.ReadFile(portedFile)
+		targetData, err := os.ReadFile(targetFile)
 		if err != nil {
 			return err
 		}
 
-		if computeSHA256Hex(patchedData) != computeSHA256Hex(portedData) {
-			drifts = append(drifts, fmt.Sprintf("[DRIFT] %s and %s are out of sync (run './scripts/update-patches.sh' or './scripts/apply-patches.sh')", portedFile, patchFile))
+		if computeSHA256Hex(patchedData) != computeSHA256Hex(targetData) {
+			drifts = append(drifts, fmt.Sprintf("[DRIFT] %s and %s are out of sync (run './scripts/update-patches.sh' or './scripts/apply-patches.sh')", targetFile, patchFile))
 		}
 	}
 
@@ -326,18 +350,16 @@ func verifyPatches(snapshotDir, patchesDir, portedDir string, trackedFiles []str
 	return nil
 }
 
-func verifySnapshots(snapshotDir string, cfg *Config) error {
-	for _, relPath := range cfg.TrackedFiles {
-		base := filepath.Base(relPath)
-		snapshotFile := filepath.Join(snapshotDir, base)
+func verifySnapshots(snapshotDir string, files []TrackedFile) error {
+	for _, f := range files {
+		snapshotFile := filepath.Join(snapshotDir, f.Snapshot)
 		data, err := os.ReadFile(snapshotFile)
 		if err != nil {
 			return fmt.Errorf("missing snapshot file %s: %w", snapshotFile, err)
 		}
 		hash := computeSHA256Hex(data)
-		expected := cfg.FileHashes[relPath]
-		if hash != expected {
-			return fmt.Errorf("snapshot hash mismatch for %s: expected %s, got %s", base, expected, hash)
+		if hash != f.SHA256 {
+			return fmt.Errorf("snapshot hash mismatch for %s: expected %s, got %s", f.Snapshot, f.SHA256, hash)
 		}
 	}
 	return nil
@@ -397,8 +419,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	if len(cfg.TrackedFiles) == 0 {
-		fmt.Fprintf(os.Stderr, "Error: no tracked files specified in %s\n", *configPath)
+	if len(cfg.Files) == 0 {
+		fmt.Fprintf(os.Stderr, "Error: no files specified in %s\n", *configPath)
 		os.Exit(1)
 	}
 
@@ -406,25 +428,25 @@ func main() {
 	if rootDir == "" {
 		rootDir = "."
 	}
-	snapshotDir := filepath.Join(rootDir, "internal/upstream/testdata/gotypes")
-	patchesDir := filepath.Join(rootDir, "internal/upstream/patches")
-	portedDir := filepath.Join(rootDir, "pkg/analyzer")
+	snapshotDir := filepath.Join(rootDir, cfg.SnapshotDir)
+	patchesDir := filepath.Join(rootDir, cfg.PatchDir)
+	targetDir := filepath.Join(rootDir, cfg.TargetDir)
 
 	if *updatePatchesFlag {
-		if err := updatePatches(snapshotDir, patchesDir, portedDir, cfg.TrackedFiles); err != nil {
+		if err := updatePatches(snapshotDir, patchesDir, targetDir, cfg.Files); err != nil {
 			fmt.Fprintf(os.Stderr, "Error updating patches: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Successfully updated %d patches in %s.\n", len(cfg.TrackedFiles), patchesDir)
+		fmt.Printf("Successfully updated patches in %s.\n", patchesDir)
 		os.Exit(0)
 	}
 
 	if *applyPatchesFlag {
-		if err := applyPatches(snapshotDir, patchesDir, portedDir, cfg.TrackedFiles); err != nil {
+		if err := applyPatches(snapshotDir, patchesDir, targetDir, cfg.Files); err != nil {
 			fmt.Fprintf(os.Stderr, "Error applying patches: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Successfully applied %d patches to %s.\n", len(cfg.TrackedFiles), portedDir)
+		fmt.Printf("Successfully applied patches to %s.\n", targetDir)
 		os.Exit(0)
 	}
 
@@ -446,12 +468,12 @@ func main() {
 			os.Exit(1)
 		}
 
-		if err := verifySnapshots(snapshotDir, cfg); err != nil {
+		if err := verifySnapshots(snapshotDir, cfg.Files); err != nil {
 			fmt.Fprintf(os.Stderr, "Snapshot check failed: %v\n", err)
 			os.Exit(1)
 		}
 
-		if err := verifyPatches(snapshotDir, patchesDir, portedDir, cfg.TrackedFiles); err != nil {
+		if err := verifyPatches(snapshotDir, patchesDir, targetDir, cfg.Files); err != nil {
 			fmt.Fprintf(os.Stderr, "Patch check failed:\n%v\n", err)
 			os.Exit(1)
 		}
@@ -484,36 +506,36 @@ func main() {
 	targetHashes := make(map[string]string)
 	fetchedData := make(map[string][]byte)
 
-	for _, file := range cfg.TrackedFiles {
-		data, err := getTrackedFileContent(cfg.UpstreamRepo, targetRevision, file, isLocal, client)
+	for _, f := range cfg.Files {
+		data, err := getTrackedFileContent(cfg.UpstreamRepo, targetRevision, f.Upstream, isLocal, client)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error processing tracked file %q: %v\n", file, err)
+			fmt.Fprintf(os.Stderr, "Error processing upstream file %q: %v\n", f.Upstream, err)
 			os.Exit(1)
 		}
-		targetHashes[file] = computeSHA256Hex(data)
-		fetchedData[file] = data
+		hash := computeSHA256Hex(data)
+		targetHashes[f.Upstream] = hash
+		fetchedData[f.Upstream] = data
 	}
 
 	if *syncFlag {
-		for _, file := range cfg.TrackedFiles {
-			base := filepath.Base(file)
-			snapshotFile := filepath.Join(snapshotDir, base)
-			data := fetchedData[file]
+		for i, f := range cfg.Files {
+			snapshotFile := filepath.Join(snapshotDir, f.Snapshot)
+			data := fetchedData[f.Upstream]
 			if err := os.WriteFile(snapshotFile, data, 0644); err != nil {
 				fmt.Fprintf(os.Stderr, "Error writing snapshot file %s: %v\n", snapshotFile, err)
 				os.Exit(1)
 			}
+			cfg.Files[i].SHA256 = targetHashes[f.Upstream]
 		}
 
 		cfg.BaseRevision = targetRevision
-		cfg.FileHashes = targetHashes
 		if err := saveConfig(*configPath, cfg); err != nil {
 			fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Synchronized %s: base_revision=%s with %d tracked file hashes.\n", *configPath, cfg.BaseRevision, len(targetHashes))
+		fmt.Printf("Synchronized %s: base_revision=%s with %d files.\n", *configPath, cfg.BaseRevision, len(cfg.Files))
 
-		if err := applyPatches(snapshotDir, patchesDir, portedDir, cfg.TrackedFiles); err != nil {
+		if err := applyPatches(snapshotDir, patchesDir, targetDir, cfg.Files); err != nil {
 			fmt.Fprintf(os.Stderr, "Error applying patches after sync: %v\n", err)
 			os.Exit(1)
 		}
@@ -528,12 +550,12 @@ func main() {
 	}
 	var diffs []diffEntry
 
-	for _, file := range cfg.TrackedFiles {
-		expectedHash := cfg.FileHashes[file]
-		actualHash := targetHashes[file]
+	for _, f := range cfg.Files {
+		expectedHash := f.SHA256
+		actualHash := targetHashes[f.Upstream]
 		if expectedHash != actualHash {
 			diffs = append(diffs, diffEntry{
-				file:     file,
+				file:     f.Upstream,
 				expected: expectedHash,
 				actual:   actualHash,
 			})
@@ -542,7 +564,7 @@ func main() {
 
 	if len(diffs) > 0 {
 		fmt.Fprintf(os.Stderr, "Upstream check failed: %d of %d tracked file(s) differ from base revision %q (target revision %q):\n",
-			len(diffs), len(cfg.TrackedFiles), cfg.BaseRevision, targetRevision)
+			len(diffs), len(cfg.Files), cfg.BaseRevision, targetRevision)
 		for _, d := range diffs {
 			fmt.Fprintf(os.Stderr, "  - %s:\n      base:   %s\n      target: %s\n", d.file, d.expected, d.actual)
 		}
@@ -554,6 +576,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	fmt.Printf("All %d tracked files match base revision %q (target revision %q).\n", len(cfg.TrackedFiles), cfg.BaseRevision, targetRevision)
+	fmt.Printf("All %d tracked files match base revision %q (target revision %q).\n", len(cfg.Files), cfg.BaseRevision, targetRevision)
 	os.Exit(0)
 }

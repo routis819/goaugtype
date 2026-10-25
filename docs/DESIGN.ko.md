@@ -169,7 +169,7 @@ type SumTypeSet struct {
 
 1. **기준 리비전 설정 파일 (`upstream.json`) 및 코드 상수 (`analyzer.UpstreamBaseRevision`)**:
    - `go.mod`의 `go` 지시자가 기준 버전의 단일 진실 공급원입니다.
-   - `upstream.json`에 `golang/go`의 기준 리비전(`base_revision`), 감시 대상 파일 목록(`tracked_files`) 및 각 파일의 해시를 프로젝트 내에 명시적으로 기록합니다.
+   - `upstream.json`에 디렉토리 매핑(`snapshot_dir`, `patch_dir`, `target_dir`), `golang/go`의 기준 리비전(`base_revision`), 그리고 `files` 배열(`upstream`, `snapshot`, `patch`, `target`, `sha256`)을 선언적으로 기록합니다.
    - `pkg/analyzer/adt.go`에 `UpstreamBaseRevision` 상수를 선언하여 `go.mod` 버전과 동기화합니다.
 2. **비교 및 검증 CLI 도구 (`./cmd/upstreamchecker`)**:
    - 쉘 스크립트로는 처리하기 까다로운 GitHub API/Git 태그 해석, 파일별 해시 대조를 수행하는 Go 프로그램입니다.
