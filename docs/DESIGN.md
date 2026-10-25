@@ -122,7 +122,7 @@ A non-`nil` value whose type is outside the sum type's type set must not be stor
 Go's standard library `go/types` package (`typeset.go`, `termlist.go`, `typeterm.go`, `union.go`, `instantiate.go`, `operand.go`, `assignments.go`) already implements type set operations, union overlapping checks, `implements`, and assignment/tuple decomposition, and `golang.org/x/tools/internal/typeparams/copytermlist.go` similarly ports this logic.
 
 #### Upstream (`src/go/types`) to `pkg/analyzer` 1:1 File & Patch Mapping
-All 7 upstream files are stored **100% unmodified** in [`internal/upstream/testdata/gotypes/`](../internal/upstream/testdata/gotypes), tracked in [`upstream.json`](../upstream.json), and transformed into [`pkg/analyzer/`](../pkg/analyzer) via unified diff patches in [`internal/upstream/patches/`](../internal/upstream/patches) using `go generate ./pkg/analyzer/...` (`make generate`):
+All 7 upstream files are stored **100% unmodified** in [`internal/upstream/testdata/gotypes/`](../internal/upstream/testdata/gotypes), tracked in [`upstream.json`](../upstream.json), and transformed into [`pkg/analyzer/`](../pkg/analyzer) via unified diff patches in [`internal/upstream/patches/`](../internal/upstream/patches) using `go generate ./...` or `./scripts/apply-patches.sh`:
 
 | Upstream `golang/go` File | Pristine Snapshot | Unified Patch | Generated / Ported File | Ported Symbols & `[goaugtype]` Extensions |
 | :--- | :--- | :--- | :--- | :--- |

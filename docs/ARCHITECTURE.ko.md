@@ -12,7 +12,7 @@
 
 1. **CLI 및 드라이버 계층 (`cmd/goaugadt`)**: `golang.org/x/tools/go/analysis/singlechecker`를 통해 독립 실행형 린터 CLI 및 외부 린터 연동을 제공합니다.
 2. **코어 정적 분석 엔진 (`pkg/analyzer`)**: AST/주석 수집, `SumTypeSet` 타입 셋 구성, 8가지 할당/변환/단언 경로 및 `type switch` 완전성 검증을 수행합니다 ([`adt.go`](../pkg/analyzer/adt.go), [`check.go`](../pkg/analyzer/check.go) 및 `go/types`에서 1:1로 포팅/생성된 7개 파일 [`typeterm.go`](../pkg/analyzer/typeterm.go), [`termlist.go`](../pkg/analyzer/termlist.go), [`typeset.go`](../pkg/analyzer/typeset.go), [`union.go`](../pkg/analyzer/union.go), [`instantiate.go`](../pkg/analyzer/instantiate.go), [`operand.go`](../pkg/analyzer/operand.go), [`assignments.go`](../pkg/analyzer/assignments.go)).
-3. **업스트림 스냅샷·패치 파이프라인 및 릴리즈 게이트키퍼 (`cmd/upstreamchecker`, `internal/upstream/`, `Makefile`, `scripts/`, `upstream.json`)**: `src/go/types` 원본 7개 파일을 [`internal/upstream/testdata/gotypes/`](../internal/upstream/testdata/gotypes)에 무수정 보관하고, [`internal/upstream/patches/`](../internal/upstream/patches)의 패치를 `go generate` (`make generate`)로 적용하며 패치 드리프트 및 업스트림 변경 여부를 검증합니다.
+3. **업스트림 스냅샷·패치 파이프라인 및 릴리즈 게이트키퍼 (`cmd/upstreamchecker`, `internal/upstream/`, `scripts/`, `upstream.json`)**: `src/go/types` 원본 7개 파일을 [`internal/upstream/testdata/gotypes/`](../internal/upstream/testdata/gotypes)에 무수정 보관하고, [`internal/upstream/patches/`](../internal/upstream/patches)의 패치를 `go generate ./...` 또는 `./scripts/apply-patches.sh`로 적용하며 패치 드리프트 및 업스트림 변경 여부를 검증합니다.
 
 ![Architecture Topology](./diagrams/architecture-topology.svg)
 *원본 소스: [`docs/diagrams/architecture-topology.d2`](./diagrams/architecture-topology.d2)*
@@ -271,7 +271,7 @@ sequenceDiagram
 
 ## 7. 업스트림(`go/types`) 스냅샷·패치 파이프라인 및 릴리즈 게이트키퍼
 
-포팅된 7개의 `go/types` 파일들을 투명하게 유지보수하기 위해, `goaugtype`은 [`internal/upstream/testdata/gotypes/`](../internal/upstream/testdata/gotypes)에 무수정 원본 스냅샷을 보관하고 [`internal/upstream/patches/`](../internal/upstream/patches)에 Unified Diff 패치 파일을 관리합니다. `cmd/upstreamchecker`, `Makefile`, `scripts/release.sh`는 **코드 상수 ↔ `upstream.json` ↔ 로컬 원본 스냅샷 + 패치 적용 결과물 ↔ 최신 Go 정식 릴리즈**의 4중 무결성을 강제합니다:
+포팅된 7개의 `go/types` 파일들을 투명하게 유지보수하기 위해, `goaugtype`은 [`internal/upstream/testdata/gotypes/`](../internal/upstream/testdata/gotypes)에 무수정 원본 스냅샷을 보관하고 [`internal/upstream/patches/`](../internal/upstream/patches)에 Unified Diff 패치 파일을 관리합니다. `cmd/upstreamchecker`, `scripts/*.sh`, `scripts/release.sh`는 **코드 상수 ↔ `upstream.json` ↔ 로컬 원본 스냅샷 + 패치 적용 결과물 ↔ 최신 Go 정식 릴리즈**의 4중 무결성을 강제합니다:
 
 | 업스트림 `golang/go` 원본 | 로컬 무수정 스냅샷 | 패치 파일 | 포팅/생성된 `pkg/analyzer` 대상 | 주요 역할 |
 | :--- | :--- | :--- | :--- | :--- |
@@ -291,7 +291,7 @@ flowchart LR
         Patches["internal/upstream/patches/<br/>Unified Diff (.patch) 7개"]
         Ported["pkg/analyzer/<br/>{typeterm,termlist,typeset,union,<br/>instantiate,operand,assignments}.go"]
         Config["upstream.json<br/>base_revision + 7개 file_hashes"]
-        ReleaseSh["Makefile & scripts/release.sh"]
+        ReleaseSh["scripts/*.sh 및 릴리즈 파이프라인"]
     end
 
     subgraph Upstream["golang/go (GitHub / 로컬 GOROOT)"]
@@ -299,9 +299,9 @@ flowchart LR
         Files["src/go/types/<br/>{typeset,termlist,typeterm,union,<br/>instantiate,assignments,operand}.go"]
     end
 
-    Snapshots -->|"git apply --3way<br/>(make generate)"| Ported
+    Snapshots -->|"git apply --3way<br/>(go generate / apply-patches.sh)"| Ported
     Patches -->|"git apply --3way"| Ported
-    Ported -. "git diff --no-index<br/>(make update-patches)" .-> Patches
+    Ported -. "git diff --no-index<br/>(update-patches.sh)" .-> Patches
     ReleaseSh -->|"1. 워킹 트리 및 패치 드리프트 검증"| Ported
     AdtConst <-->|"반드시 일치"| Config
     Snapshots <-->|"SHA-256 해시 일치"| Config
