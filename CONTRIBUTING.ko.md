@@ -123,26 +123,32 @@ go generate ./...
 
 ### 4. 새로운 Go 업스트림 릴리즈 동기화
 
-새로운 공식 Go 마이너 또는 패치 버전(예: `go1.28.0`)이 출시되었을 때 동기화하는 절차입니다:
+**원칙**: 기준 버전의 단일 진실 공급원(Single Source of Truth)은 [`go.mod`](./go.mod)의 `go` 버전 지시자입니다. [`pkg/analyzer/adt.go`](./pkg/analyzer/adt.go)의 `UpstreamBaseRevision`과 [`upstream.json`](./upstream.json)의 `base_revision`은 항상 `go.mod`에 선언된 `go` 버전(`"go" + <go.mod 버전>`)에 맞추어야 합니다.
 
-1. [`pkg/analyzer/adt.go`](./pkg/analyzer/adt.go)의 **`UpstreamBaseRevision`을 변경**합니다:
+`go.mod`의 Go 버전을 업그레이드할 때(예: `1.28.0`)의 동기화 절차는 다음과 같습니다:
+
+1. [`go.mod`](./go.mod)의 **`go` 버전을 먼저 변경**합니다:
+   ```go
+   go 1.28.0
+   ```
+2. [`pkg/analyzer/adt.go`](./pkg/analyzer/adt.go)의 **`UpstreamBaseRevision`을 `go.mod` 버전에 맞춥니다**:
    ```go
    const UpstreamBaseRevision = "go1.28.0"
    ```
-2. **스냅샷 동기화 및 3-way 병합을 수행**합니다:
+3. **스냅샷 동기화 및 3-way 병합을 수행**합니다:
    ```bash
    ./scripts/sync-upstream.sh -target go1.28.0
    ```
    이 스크립트는 다음 작업을 순차적으로 수행합니다:
-   - `golang/go` 원격 저장소에서 새 원본 파일을 가져옵니다.
+   - `golang/go` 원격 저장소에서 `go1.28.0` 원본 파일을 가져옵니다.
    - `internal/upstream/testdata/gotypes/*.go` 스냅샷을 갱신합니다.
    - `upstream.json` 내 새 SHA-256 해시를 기록합니다.
    - 기존 패치 파일들을 `git apply --3way`로 자동 적용합니다.
-3. 3-way 병합으로 라인 오프셋이 이동한 경우 **패치를 다시 저장**합니다:
+4. 3-way 병합으로 라인 오프셋이 이동한 경우 **패치를 다시 저장**합니다:
    ```bash
    ./scripts/update-patches.sh
    ```
-4. **전체 파이프라인 무결성을 검증**합니다:
+5. **전체 파이프라인 무결성을 검증**합니다:
    ```bash
    ./scripts/release.sh --check-only
    ```
@@ -166,10 +172,11 @@ git push origin v0.3.0
 
 ## 엔지니어링 가이드라인
 
-1. **최소 변경 원칙(Minimal Diff)**: 원본 `go/types` 대비 차이점을 최소화하고, 모든 커스텀 수정 영역은 `// [goaugtype]`으로 명시하십시오.
-2. **쌍별 서로소 불변식 엄수**: 모든 합타입은 평탄화된 항들 사이의 쌍별 서로소를 반드시 보장해야 합니다. `any`나 서브타입 충돌($C \subset I$, $I_1 \subseteq I_2$)을 절대 허용하지 마십시오.
-3. **`gopls` 진단 제로 유지**: 풀 리퀘스트를 제출하기 전 모든 패키지에서 에러 및 경고 진단이 0개인지 확인하십시오.
-4. **패치 동기화 필수**: `pkg/analyzer/{typeterm,termlist,typeset,union,instantiate,operand,assignments}.go`를 수정한 경우, 반드시 `./scripts/update-patches.sh`를 실행하여 `internal/upstream/patches/*.patch` 파일도 함께 커밋해야 합니다.
+1. **`UpstreamBaseRevision`은 `go.mod`의 `go` 버전을 따름**: [`pkg/analyzer/adt.go`](./pkg/analyzer/adt.go)의 `UpstreamBaseRevision` 및 [`upstream.json`](./upstream.json)의 `base_revision`은 항상 [`go.mod`](./go.mod)에 명시된 `go` 버전과 일치해야 합니다(예: `go 1.27.3` → `UpstreamBaseRevision = "go1.27.3"`).
+2. **최소 변경 원칙(Minimal Diff)**: 원본 `go/types` 대비 차이점을 최소화하고, 모든 커스텀 수정 영역은 `// [goaugtype]`으로 명시하십시오.
+3. **쌍별 서로소 불변식 엄수**: 모든 합타입은 평탄화된 항들 사이의 쌍별 서로소를 반드시 보장해야 합니다. `any`나 서브타입 충돌($C \subset I$, $I_1 \subseteq I_2$)을 절대 허용하지 마십시오.
+4. **`gopls` 진단 제로 유지**: 풀 리퀘스트를 제출하기 전 모든 패키지에서 에러 및 경고 진단이 0개인지 확인하십시오.
+5. **패치 동기화 필수**: `pkg/analyzer/{typeterm,termlist,typeset,union,instantiate,operand,assignments}.go`를 수정한 경우, 반드시 `./scripts/update-patches.sh`를 실행하여 `internal/upstream/patches/*.patch` 파일도 함께 커밋해야 합니다.
 
 ---
 
