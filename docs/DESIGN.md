@@ -117,33 +117,51 @@ A non-`nil` value whose type is outside the sum type's type set must not be stor
   - When analyzing a package, `goaugtype` exports a serializable fact (`pass.ExportObjectFact(typeNameObj, &fact)`) attached to each sum type's `*types.TypeName` object.
   - When inspecting types imported from external packages, `goaugtype` retrieves sum type metadata via `pass.ImportObjectFact(obj, &fact)`, enabling full assignability and `type switch` exhaustiveness checks across package boundaries.
 
-### 2.8. `SumTypeSet` Engine Adapted from `go/types` & Upstream Tracking (#14)
+### 2.8. `SumTypeSet` Engine Ported from `go/types` & Upstream Tracking (#14)
 
-Go's standard library `go/types` package (`typeset.go`, `termlist.go`, `typeterm.go`, `union.go`, `instantiate.go`) already implements type set operations for type parameter constraints, and `golang.org/x/tools/internal/typeparams/copytermlist.go` similarly adapts this logic.
+Go's standard library `go/types` package (`typeset.go`, `termlist.go`, `typeterm.go`, `union.go`, `instantiate.go`, `operand.go`, `assignments.go`) already implements type set operations, union overlapping checks, `implements`, and assignment/tuple decomposition, and `golang.org/x/tools/internal/typeparams/copytermlist.go` similarly ports this logic.
 
-#### Why Adapt `go/types` Instead of Calling `types.Union` Directly?
+#### Upstream (`src/go/types`) to `pkg/analyzer` File Mapping
+All 7 upstream files are tracked in [`upstream.json`](../upstream.json) and ported into `pkg/analyzer/` with minimal changes marked by `// [goaugtype]`:
+
+| Upstream `golang/go` File | Ported `goaugtype` File | Ported Symbols & `[goaugtype]` Extensions |
+| :--- | :--- | :--- |
+| `src/go/types/typeterm.go` | [`pkg/analyzer/typeterm.go`](../pkg/analyzer/typeterm.go) | `term`, `(*term).String`, `equal`, `union`, `intersect`, `includes`, `subsetOf`, `disjoint` — extended with `types.Implements` for non-empty interface terms (`#5`). |
+| `src/go/types/termlist.go` | [`pkg/analyzer/termlist.go`](../pkg/analyzer/termlist.go) | `termlist`, `allTermlist`, `String`, `isEmpty`, `isAll`, `norm`, `union`, `intersect`, `equal`, `includes`, `supersetOf`, `subsetOf` — preserved intact (`100%` structural parity). |
+| `src/go/types/typeset.go` | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `_TypeSet`, `IsEmpty`, `IsAll`, `IsMethodSet`, `IsComparable`, `NumMethods`, `Method`, `LookupMethod`, `String`, `hasTerms`, `subsetOf`, `terms` (`computeInterfaceTypeSet`). |
+| `src/go/types/union.go` | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `parseTilde` (rejects `~T` and `nil`, `#9`), `overlappingTerm` (detects concrete-concrete, concrete-interface, and interface-interface overlap), `computeUnionTypeSet` (flattens nested sum types via `Registry`, `#10`). |
+| `src/go/types/instantiate.go` | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `implements` — checks method set satisfaction (`#9`) and term-set inclusion (`tset.subsetOf( Tset)` / `Tset.includes(V)`). |
+| `src/go/types/operand.go` | [`pkg/analyzer/assignments.go`](../pkg/analyzer/assignments.go) | `operandMode`, `operand`, `(*operand).assignableTo` — hooks `Registry.Lookup(T)` to enforce sum type assignability via `implements`. |
+| `src/go/types/assignments.go` | [`pkg/analyzer/assignments.go`](../pkg/analyzer/assignments.go) | `assignment`, `initVar`, `assignVar`, `unpackRecv`, `initVars`, `assignVars`, `returnVars` — handles 1:1 and multi-value tuple (`CommaOk` / `()`) decomposition across `var`, `=`, `:=`, and `return`. |
+
+#### Why Port `go/types` Instead of Calling `types.Union` Directly?
 1. **Preventing `allTermlist` (`𝓤`) Explosion on Interface Terms with Methods (Issue #5)**:
    - Because standard Go generics disallow interfaces with methods (such as `error`) inside unions, `computeUnionTypeSet` in `go/types` ignores an interface term's methods and merges only its `.terms` (`allTermlist = 𝓤`).
    - Passing `string | error` directly to `types.NewUnion` would therefore collapse the entire union into `any` (`𝓤`).
 2. **Expanding Nested Sum Types (`I1 | float64`) Beyond Their Underlying `any` Type**:
    - In standard Go AST/types, `type I1 any` has `any` as its underlying type. Flattening `I1` requires looking up `I1`'s `SumTypeSet` from `goaugtype`'s registry rather than `go/types`.
 3. **Enforcing Pairwise Disjointness & Computing `type switch` Set Differences**:
-   - `goaugtype` validates pairwise disjointness across `concreteTerms` and `ifaceTerms` and computes missing cases (set cover / difference over `concreteTerms`, `ifaceTerms`, and `nil`) for `type switch` exhaustiveness.
+   - `goaugtype` validates pairwise disjointness via `overlappingTerm` and computes missing cases (set cover / difference over `concreteTerms`, `ifaceTerms`, and `nil`) for `type switch` exhaustiveness.
 
-#### `SumTypeSet` Data Model (Adapted from `go/types._TypeSet`)
+#### `SumTypeSet` Data Model (Wrapping `_TypeSet` in [`pkg/analyzer/adt.go`](../pkg/analyzer/adt.go))
 ```go
 type SumTypeSet struct {
-    selfIface     *types.Interface   // The sum type interface itself (for method set validation, #9)
-    concreteTerms []types.Type       // Concrete type terms (matched via types.Identical)
-    ifaceTerms    []types.Type       // Regular non-empty interface terms (e.g., error, io.Reader -> matched via types.Implements, #5)
+    Name          *types.TypeName
+    SumType       types.Type
+    SelfIface     *types.Interface
+    RawTerms      []types.Type
+    ConcreteTerms []types.Type // Concrete type terms (matched via types.Identical)
+    IfaceTerms    []types.Type // Regular non-empty interface terms (matched via types.Implements, #5)
+    Pos           token.Pos
+    tset          *_TypeSet    // Upstream go/types _TypeSet representation
 }
 ```
-- `ValidateTerms() []augtError`: Verifies method set implementation (`#9`) and pairwise disjointness across `concreteTerms` and `ifaceTerms`.
-- `Includes(V types.Type) bool`: Analogous to `implements` / `term.includes` in `go/types`.
-- `SubsetOf(other *SumTypeSet) bool`: Analogous to `_TypeSet.subsetOf` in `go/types` (#10).
+- `ValidateTerms() []augtError`: Runs `computeUnionTypeSet` (`overlappingTerm`) and `implements` (`#9`) to verify method set satisfaction and pairwise disjointness.
+- `Includes(V types.Type) bool`: Delegates to `tset.includes(V)` (`termlist.includes` in `termlist.go`).
+- `SubsetOf(other *SumTypeSet) bool`: Delegates to `tset.subsetOf(other.tset)` (`_TypeSet.subsetOf` in `typeset.go`, `#10`).
 
 #### Automated Upstream (`golang/go`) Revision Tracking Strategy
-To reliably track whether the reference files in `src/go/types/{typeset,termlist,typeterm,union,instantiate}.go` (mirrored from `src/cmd/compile/internal/types2/`) change in future Go releases, the repository includes a configuration file, a dedicated CLI tool (`./cmd/upstreamchecker`), and wrapper scripts (`./scripts`):
+To reliably track whether the 7 reference files in `src/go/types/{typeset,termlist,typeterm,union,instantiate,assignments,operand}.go` (mirrored from `src/cmd/compile/internal/types2/`) change in future Go releases, the repository includes a configuration file, a dedicated CLI tool (`./cmd/upstreamchecker`), and wrapper scripts (`./scripts`):
 
 1. **Baseline Revision Configuration (`upstream.json`) & Code Constant (`analyzer.UpstreamBaseRevision`)**:
    - `upstream.json` explicitly records the `golang/go` revision (`base_revision`), the list of `tracked_files`, and their SHA-256 `file_hashes` against which `goaugtype`'s type set engine was written.

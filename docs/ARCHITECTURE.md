@@ -10,11 +10,11 @@ For detailed language specifications and rationale aligned with [golang/go#57644
 
 `goaugtype` is structured into three primary layers:
 1. **CLI & Driver Layer (`cmd/goaugadt`)**: Wraps the analyzer with `golang.org/x/tools/go/analysis/singlechecker` for standalone CLI execution and standard linter integration.
-2. **Core Analysis Engine (`pkg/analyzer`)**: Implements the two-pass AST/type-set static analyzer ([`adt.go`](../pkg/analyzer/adt.go) and [`check.go`](../pkg/analyzer/check.go)).
-3. **Upstream Synchronization & Release Gatekeeper (`cmd/upstreamchecker`, `scripts/`, `upstream.json`)**: Ensures the `SumTypeSet` engine stays synchronized with Go's standard library `src/go/types` across Go releases.
+2. **Core Analysis Engine (`pkg/analyzer`)**: Implements the two-pass AST/type-set static analyzer ([`adt.go`](../pkg/analyzer/adt.go), [`check.go`](../pkg/analyzer/check.go), and the `go/types`-ported engine files [`typeterm.go`](../pkg/analyzer/typeterm.go), [`termlist.go`](../pkg/analyzer/termlist.go), [`typeset.go`](../pkg/analyzer/typeset.go), and [`assignments.go`](../pkg/analyzer/assignments.go)).
+3. **Upstream Synchronization & Release Gatekeeper (`cmd/upstreamchecker`, `scripts/`, `upstream.json`)**: Ensures the `SumTypeSet` and assignment engine stays synchronized with Go's standard library `src/go/types` across Go releases.
 
 ![Architecture Topology](./diagrams/architecture-topology.svg)
-*Source: [`docs/diagrams/architecture-topology.d2`](./diagrams/architecture-topology.d2)*
+*Source: [`docs/diagrams/architecture-topology.d2`](./docs/diagrams/architecture-topology.d2)*
 
 ```mermaid
 flowchart TB
@@ -29,8 +29,8 @@ flowchart TB
         Entry["Analyzer.Run (run)<br/>check.go"]
         Collector["Pass 1: AST & Directive Collector<br/>(collectInfo / inspector)"]
         Builder["Pass 2: Registry & TypeSet Builder<br/>(BuildRegistry)"]
-        Registry["Registry & SumTypeSet<br/>adt.go"]
-        Checker["Pass 3: 8-Path & Switch Verifier<br/>(check)"]
+        Registry["Registry & SumTypeSet<br/>adt.go + {typeterm,termlist,typeset}.go"]
+        Checker["Pass 3: 8-Path & Switch Verifier<br/>check.go + assignments.go"]
         Facts["SumTypeFact<br/>(analysis.Fact Gob Codec)"]
     end
 
@@ -270,24 +270,36 @@ sequenceDiagram
 
 ## 7. Upstream `go/types` Synchronization & Release Gatekeeper
 
-To ensure `SumTypeSet` stays aligned with upstream `golang/go` changes to `src/go/types`, `cmd/upstreamchecker` and `scripts/release.sh` enforce a 3-way consistency check before any release tag is created:
+To ensure the ported `go/types` engine files stay aligned with upstream `golang/go` changes to `src/go/types`, `cmd/upstreamchecker` and `scripts/release.sh` enforce a 3-way consistency check across all 7 tracked files before any release tag is created:
+
+| Upstream `golang/go` Source | Ported `pkg/analyzer` Target | Purpose |
+| :--- | :--- | :--- |
+| `src/go/types/typeterm.go` | [`pkg/analyzer/typeterm.go`](../pkg/analyzer/typeterm.go) | Single type term operations (`includes`, `subsetOf`, `disjoint`, `union`, `intersect`) with interface support |
+| `src/go/types/termlist.go` | [`pkg/analyzer/termlist.go`](../pkg/analyzer/termlist.go) | Normalized term list set algebra (`norm`, `includes`, `supersetOf`, `subsetOf`) |
+| `src/go/types/typeset.go` | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `_TypeSet` representation, method set lookup, and `computeInterfaceTypeSet` |
+| `src/go/types/union.go` | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | Union term parsing (`parseTilde`), pairwise disjointness (`overlappingTerm`), and nested sum type flattening (`computeUnionTypeSet`) |
+| `src/go/types/instantiate.go` | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `implements` verification (method set satisfaction + `_TypeSet` inclusion/subset check) |
+| `src/go/types/operand.go` | [`pkg/analyzer/assignments.go`](../pkg/analyzer/assignments.go) | `operand` representation and `assignableTo` with `Registry` sum type hook |
+| `src/go/types/assignments.go` | [`pkg/analyzer/assignments.go`](../pkg/analyzer/assignments.go) | 1:1 and multi-value tuple (`unpackRecv`) assignment verification (`initVars`, `assignVars`, `returnVars`) |
 
 ```mermaid
 flowchart LR
     subgraph Repo["goaugtype Repository"]
         AdtConst["pkg/analyzer/adt.go<br/>UpstreamBaseRevision"]
-        Config["upstream.json<br/>base_revision + file_hashes"]
+        Ported["pkg/analyzer/<br/>{typeterm,termlist,typeset,assignments}.go"]
+        Config["upstream.json<br/>base_revision + 7 file_hashes"]
         ReleaseSh["scripts/release.sh"]
     end
 
     subgraph Upstream["golang/go (GitHub / Local GOROOT)"]
         Tags["GitHub Tags API<br/>Latest Official Release (go1.x.y)"]
-        Files["src/go/types/<br/>{typeset,termlist,typeterm,union,instantiate}.go"]
+        Files["src/go/types/<br/>{typeset,termlist,typeterm,union,<br/>instantiate,assignments,operand}.go"]
     end
 
     ReleaseSh -->|"1. Verify clean git tree"| Repo
     ReleaseSh -->|"2. Check base_revision"| Config
     AdtConst <-->|"Must equal"| Config
+    Ported -. "ported from" .-> Files
     ReleaseSh -->|"3. Check latest Go release"| Tags
     Config <-->|"Must equal latest tag & SHA-256"| Files
     ReleaseSh -->|"4. go test -v ./..."| Repo

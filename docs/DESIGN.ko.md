@@ -119,33 +119,51 @@ Go의 인터페이스 유니온에서 각 항(Term)은 구체 타입일 수도 �
   - 패키지 분석 시 합타입으로 선언된 `*types.TypeName` 객체에 직렬화 가능한 Fact 구조체(허용된 타입들의 패키지 경로 및 타입명)를 `pass.ExportObjectFact(typeNameObj, &fact)`로 내보냅니다.
   - 외부 패키지의 타입을 사용할 때는 `pass.ImportObjectFact(obj, &fact)`로 합타입 메타데이터를 조회하여, 외부 패키지에서 정의된 합타입에 대해서도 대입 및 `type switch` 완전성 검사가 동일하게 작동하도록 합니다.
 
-### 2.8. `go/types` Type Parameter Constraint 기반 엔진 설계 및 업스트림 자동 추적 (#14)
+### 2.8. `go/types` 코드 직접 포팅 기반 엔진 설계 및 업스트림 자동 추적 (#14)
 
-Go 표준 라이브러리의 `go/types` 패키지(`typeset.go`, `termlist.go`, `typeterm.go`, `union.go`, `instantiate.go`)에는 이미 타입 파라미터 제약(Constraint)을 위한 집합 연산이 구현되어 있으며, `golang.org/x/tools/internal/typeparams/copytermlist.go` 역시 이를 복사·변형하여 사용하고 있습니다.
+Go 표준 라이브러리의 `go/types` 패키지(`typeset.go`, `termlist.go`, `typeterm.go`, `union.go`, `instantiate.go`, `operand.go`, `assignments.go`)에는 이미 타입 셋 연산, 유니온 중복 검사, `implements`, 그리고 변수 대입/다중 반환 튜플 분해 로직이 구현되어 있으며, `golang.org/x/tools/internal/typeparams/copytermlist.go` 역시 이를 복사·변형하여 사용하고 있습니다.
 
-#### 왜 `types.Union`을 그대로 호출하지 않고 변형(Adapt)하는가?
+#### 업스트림(`src/go/types`) ↔ `pkg/analyzer` 파일 1:1 매핑
+총 7개의 업스트림 원본 파일이 [`upstream.json`](../upstream.json)을 통해 해시 추적되며, 수정 지점은 코드 내에 `// [goaugtype]` 주석으로 명시되어 있습니다:
+
+| 업스트림 `golang/go` 원본 파일 | 포팅된 `goaugtype` 파일 | 포팅된 주요 심볼 및 `[goaugtype]` 확장 내역 |
+| :--- | :--- | :--- |
+| `src/go/types/typeterm.go` | [`pkg/analyzer/typeterm.go`](../pkg/analyzer/typeterm.go) | `term`, `(*term).String`, `equal`, `union`, `intersect`, `includes`, `subsetOf`, `disjoint` — 비어 있지 않은 일반 인터페이스 항에 대해 `types.Implements` 판정 추가 (`#5`). |
+| `src/go/types/termlist.go` | [`pkg/analyzer/termlist.go`](../pkg/analyzer/termlist.go) | `termlist`, `allTermlist`, `String`, `isEmpty`, `isAll`, `norm`, `union`, `intersect`, `equal`, `includes`, `supersetOf`, `subsetOf` — 원본 알고리즘 100% 보존. |
+| `src/go/types/typeset.go` | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `_TypeSet`, `IsEmpty`, `IsAll`, `IsMethodSet`, `IsComparable`, `NumMethods`, `Method`, `LookupMethod`, `String`, `hasTerms`, `subsetOf`, `terms` (`computeInterfaceTypeSet`). |
+| `src/go/types/union.go` | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `parseTilde`(`~T` 및 `nil` 금지, `#9`), `overlappingTerm`(구체↔구체, 구체↔인터페이스, 인터페이스↔인터페이스 포함/중복 감지), `computeUnionTypeSet`(`Registry`를 통한 중첩 합타입 재귀 평탄화, `#10`). |
+| `src/go/types/instantiate.go` | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `implements` — 합타입 자체의 메서드 셋 구현 검증(`#9`) 및 타입 셋 포함/부분집합 판정(`tset.subsetOf` / `tset.includes`). |
+| `src/go/types/operand.go` | [`pkg/analyzer/assignments.go`](../pkg/analyzer/assignments.go) | `operandMode`, `operand`, `(*operand).assignableTo` — `Registry.Lookup(T)`를 후킹하여 `implements` 기반 합타입 대입 가능성 검증. |
+| `src/go/types/assignments.go` | [`pkg/analyzer/assignments.go`](../pkg/analyzer/assignments.go) | `assignment`, `initVar`, `assignVar`, `unpackRecv`, `initVars`, `assignVars`, `returnVars` — `var`, `=`, `:=`, `return`에서의 1:1 및 다중 반환 튜플(`CommaOk` / `()`) 분해 대입 검증. |
+
+#### 왜 `types.Union`을 그대로 호출하지 않고 `go/types` 내부 구현을 포팅하는가?
 1. **메서드가 있는 인터페이스 항의 `allTermlist`(`𝓤`) 폭발 방지 (Issue #5 연계)**:
    - 현행 Go 제네릭은 유니온 내에 메서드가 있는 인터페이스(예: `error`)를 문법적으로 금지하므로, `go/types`의 `computeUnionTypeSet`은 인터페이스 항을 만났을 때 메서드를 무시하고 `.terms`(`allTermlist = 𝓤`)만 합집합해 버립니다.
    - 따라서 `types.NewUnion`에 `string | error`를 그대로 넣으면 타입 셋 전체가 `any`(`𝓤`)로 오염됩니다.
 2. **중첩 합타입(`I1 | float64`)의 기저 타입(`any`) 치환**:
    - 실제 Go 코드에서 `type I1 any`의 기저 타입은 빈 인터페이스이므로, `go/types`가 아닌 `goaugtype`의 자체 합타입 레지스트리에서 `I1`의 타입 셋을 찾아 평탄화해야 합니다.
 3. **선언부 서로소 검증 및 `type switch` 차집합(Missing Cases) 계산**:
-   - `concreteTerms`와 `ifaceTerms` 간의 쌍별 서로소(Pairwise Disjointness) 검증과 `type switch`의 완전성(Set Cover / Difference) 연산을 수행해야 합니다.
+   - `overlappingTerm`을 통한 쌍별 서로소(Pairwise Disjointness) 검증과 `type switch`의 완전성(Set Cover / Difference) 연산을 수행해야 합니다.
 
-#### `SumTypeSet` 데이터 모델 (`go/types._TypeSet` 변형)
+#### `SumTypeSet` 데이터 모델 ([`pkg/analyzer/adt.go`](../pkg/analyzer/adt.go) 내 `_TypeSet` 래퍼)
 ```go
 type SumTypeSet struct {
-    selfIface     *types.Interface   // 합타입 자체의 인터페이스 (메서드 셋 검증용, #9)
-    concreteTerms []types.Type       // 구체 타입 항들 (types.Identical 비교)
-    ifaceTerms    []types.Type       // 비어 있지 않은 일반 인터페이스 항들 (error, io.Reader 등 -> types.Implements 비교, #5)
+    Name          *types.TypeName
+    SumType       types.Type
+    SelfIface     *types.Interface
+    RawTerms      []types.Type
+    ConcreteTerms []types.Type // 구체 타입 항들 (types.Identical 비교)
+    IfaceTerms    []types.Type // 비어 있지 않은 일반 인터페이스 항들 (types.Implements 비교, #5)
+    Pos           token.Pos
+    tset          *_TypeSet    // 포팅된 go/types _TypeSet 내부 표현
 }
 ```
-- `ValidateTerms() []augtError`: 메서드 셋 구현 여부(#9) 및 `concreteTerms`·`ifaceTerms` 간의 쌍별 서로소(Pairwise Disjointness) 검증.
-- `Includes(V types.Type) bool`: `go/types`의 `implements` / `term.includes`에 대응.
-- `SubsetOf(other *SumTypeSet) bool`: `go/types`의 `_TypeSet.subsetOf`에 대응 (#10).
+- `ValidateTerms() []augtError`: `computeUnionTypeSet`(`overlappingTerm`) 및 `implements`(`#9`)를 호출하여 메서드 셋 구현 여부 및 쌍별 서로소(Pairwise Disjointness) 검증.
+- `Includes(V types.Type) bool`: `tset.includes(V)`(`termlist.go`의 `termlist.includes`)로 위임.
+- `SubsetOf(other *SumTypeSet) bool`: `tset.subsetOf(other.tset)`(`typeset.go`의 `_TypeSet.subsetOf`, `#10`)로 위임.
 
 #### 업스트림(`golang/go`) 코드 변경 자동 추적 전략
-참조 원본인 `src/go/types/{typeset,termlist,typeterm,union,instantiate}.go`(원본 소스: `src/cmd/compile/internal/types2/`)가 향후 Go 버전에서 변경되었는지 정확하고 안정적으로 추적하기 위해 설정 파일과 전용 CLI 도구(`./cmd/upstreamchecker`), 그리고 래퍼 스크립트(`./scripts`)로 구성된 체계를 구축합니다:
+참조 원본인 7개 파일 `src/go/types/{typeset,termlist,typeterm,union,instantiate,assignments,operand}.go`(원본 소스: `src/cmd/compile/internal/types2/`)가 향후 Go 버전에서 변경되었는지 정확하고 안정적으로 추적하기 위해 설정 파일과 전용 CLI 도구(`./cmd/upstreamchecker`), 그리고 래퍼 스크립트(`./scripts`)로 구성된 체계를 구축합니다:
 
 1. **기준 리비전 설정 파일 (`upstream.json`) 및 코드 상수 (`analyzer.UpstreamBaseRevision`)**:
    - `upstream.json`에 현재 `goaugtype`의 타입 셋 코드가 `golang/go`의 어느 리비전(`base_revision`)을 기준으로 작성되었는지와 감시 대상 파일 목록(`tracked_files`) 및 각 파일의 해시를 프로젝트 내에 명시적으로 기록합니다.
