@@ -8,15 +8,16 @@ usage() {
   cat <<EOF
 Usage: $(basename "$0") [flags]
 
-Verifies 4-way upstream consistency between:
-  1. analyzer.UpstreamBaseRevision in pkg/analyzer/adt.go
-  2. base_revision and file_hashes in upstream.json
-  3. internal/upstream/testdata/gotypes/*.go and internal/upstream/patches/*.patch drift check
-  4. Target revision (local GOROOT or remote golang/go release tag)
+Verifies 5-way upstream consistency between:
+  1. go version directive in go.mod
+  2. analyzer.UpstreamBaseRevision in pkg/analyzer/adt.go
+  3. base_revision and file_hashes in upstream.json
+  4. internal/upstream/testdata/gotypes/*.go and internal/upstream/patches/*.patch drift check
+  5. Target revision (default: go version from go.mod; 'latest' for latest GitHub release; 'local' for GOROOT; or explicit tag/commit)
 
 Flags:
   -config <path>   Path to config file (default: upstream.json)
-  -target <rev>    Target revision to compare against (empty for latest release tag, 'local' for GOROOT, or explicit tag/branch/commit)
+  -target <rev>    Target revision to compare against (default: go version from go.mod; 'latest' for latest GitHub release; 'local' for GOROOT; or explicit tag/commit)
   -h, --help       Show this help message
 EOF
   exit 0

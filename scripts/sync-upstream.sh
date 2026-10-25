@@ -8,12 +8,12 @@ usage() {
   cat <<EOF
 Usage: $(basename "$0") [flags]
 
-Synchronizes internal/upstream/testdata/gotypes/*.go and upstream.json with the latest
-golang/go release tag (or a target revision specified via -target), applies patches
+Synchronizes internal/upstream/testdata/gotypes/*.go and upstream.json with the Go version
+specified in go.mod (or a target revision specified via -target), applies patches
 to pkg/analyzer via 3-way merge, and refreshes the unified diff patches.
 
 Flags:
-  -target <rev>    Target revision to synchronize with (empty for latest release tag, 'local' for GOROOT, or explicit tag/branch/commit)
+  -target <rev>    Target revision to synchronize with (default: go version from go.mod; 'latest' for latest GitHub release; 'local' for GOROOT; or explicit tag/commit)
   -config <path>   Path to config file (default: upstream.json)
   -h, --help       Show this help message
 EOF

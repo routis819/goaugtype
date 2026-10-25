@@ -121,6 +121,8 @@ A non-`nil` value whose type is outside the sum type's type set must not be stor
 
 Go's standard library `go/types` package (`typeset.go`, `termlist.go`, `typeterm.go`, `union.go`, `instantiate.go`, `operand.go`, `assignments.go`) already implements type set operations, union overlapping checks, `implements`, and assignment/tuple decomposition, and `golang.org/x/tools/internal/typeparams/copytermlist.go` similarly ports this logic.
 
+[`go.mod`](../go.mod)'s `go` directive is the canonical single source of truth for the target Go version. `UpstreamBaseRevision` in [`pkg/analyzer/adt.go`](../pkg/analyzer/adt.go) and `base_revision` in [`upstream.json`](../upstream.json) must always match `go.mod`. `cmd/upstreamchecker` and `scripts/release.sh` enforce 5-way consistency (`go.mod` ↔ `UpstreamBaseRevision` ↔ `upstream.json` ↔ snapshots + patches ↔ upstream `golang/go`).
+
 #### Upstream (`src/go/types`) to `pkg/analyzer` 1:1 File & Patch Mapping
 All 7 upstream files are stored **100% unmodified** in [`internal/upstream/testdata/gotypes/`](../internal/upstream/testdata/gotypes), tracked in [`upstream.json`](../upstream.json), and transformed into [`pkg/analyzer/`](../pkg/analyzer) via unified diff patches in [`internal/upstream/patches/`](../internal/upstream/patches) using `go generate ./...` or `./scripts/apply-patches.sh`:
 

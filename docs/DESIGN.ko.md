@@ -123,6 +123,8 @@ Go의 인터페이스 유니온에서 각 항(Term)은 구체 타입일 수도 �
 
 Go 표준 라이브러리의 `go/types` 패키지(`typeset.go`, `termlist.go`, `typeterm.go`, `union.go`, `instantiate.go`, `operand.go`, `assignments.go`)에는 이미 타입 셋 연산, 유니온 중복 검사, `implements`, 그리고 변수 대입/다중 반환 튜플 분해 로직이 구현되어 있으며, `golang.org/x/tools/internal/typeparams/copytermlist.go` 역시 이를 복사·변형하여 사용하고 있습니다.
 
+[`go.mod`](../go.mod)의 `go` 지시자가 기준 버전의 단일 진실 공급원(Single Source of Truth)으로 동작합니다. [`pkg/analyzer/adt.go`](../pkg/analyzer/adt.go)의 `UpstreamBaseRevision`과 [`upstream.json`](../upstream.json)의 `base_revision`은 항상 `go.mod` 버전에 일치해야 하며, `cmd/upstreamchecker`와 `scripts/release.sh`는 5중 무결성(`go.mod` ↔ `UpstreamBaseRevision` ↔ `upstream.json` ↔ 로컬 원본 스냅샷 + 패치 ↔ 업스트림 `golang/go`)을 강제합니다.
+
 #### 업스트림(`src/go/types`) ↔ 원본 스냅샷 ↔ 패치 ↔ `pkg/analyzer` 1:1 매핑
 총 7개의 업스트림 원본 파일이 [`internal/upstream/testdata/gotypes/`](../internal/upstream/testdata/gotypes)에 **100% 무수정 상태**로 보관되며, [`internal/upstream/patches/`](../internal/upstream/patches)의 Unified Diff 패치를 `go generate ./...` 또는 `./scripts/apply-patches.sh`로 적용하여 [`pkg/analyzer/`](../pkg/analyzer) 내 7개 파일을 생성합니다:
 

@@ -343,6 +343,28 @@ func verifySnapshots(snapshotDir string, cfg *Config) error {
 	return nil
 }
 
+func readGoModRevision(rootDir string) (string, error) {
+	goModFile := filepath.Join(rootDir, "go.mod")
+	data, err := os.ReadFile(goModFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to read go.mod: %w", err)
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "go ") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				ver := fields[1]
+				if strings.HasPrefix(ver, "go") {
+					return ver, nil
+				}
+				return "go" + ver, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("go version directive not found in %s", goModFile)
+}
+
 func getAnalyzerUpstreamBaseRevision(rootDir string) (string, error) {
 	adtFile := filepath.Join(rootDir, "pkg/analyzer/adt.go")
 	data, err := os.ReadFile(adtFile)
@@ -363,7 +385,7 @@ func getAnalyzerUpstreamBaseRevision(rootDir string) (string, error) {
 
 func main() {
 	configPath := flag.String("config", "upstream.json", "path to config file")
-	targetFlag := flag.String("target", "", "target revision to compare against (empty for latest release tag, 'local' for GOROOT, or explicit tag/branch/commit)")
+	targetFlag := flag.String("target", "", "target revision to compare against (empty for go.mod version, 'latest' for latest official release, 'local' for GOROOT, or explicit tag/branch/commit)")
 	updateFlag := flag.Bool("update", false, "update base_revision and file_hashes in config file with target values")
 	applyPatchesFlag := flag.Bool("apply-patches", false, "apply upstream patches to pkg/analyzer")
 	updatePatchesFlag := flag.Bool("update-patches", false, "generate/update upstream patches from pkg/analyzer")
@@ -406,14 +428,21 @@ func main() {
 		os.Exit(0)
 	}
 
+	goModRev, err := readGoModRevision(rootDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading go.mod: %v\n", err)
+		os.Exit(1)
+	}
+
 	if !*updateFlag {
 		adtBaseRevision, err := getAnalyzerUpstreamBaseRevision(rootDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error checking UpstreamBaseRevision: %v\n", err)
 			os.Exit(1)
 		}
-		if cfg.BaseRevision != adtBaseRevision {
-			fmt.Fprintf(os.Stderr, "implementation mismatch: upstream.json base_revision (%s) != analyzer.UpstreamBaseRevision (%s)\n", cfg.BaseRevision, adtBaseRevision)
+		if cfg.BaseRevision != adtBaseRevision || cfg.BaseRevision != goModRev || adtBaseRevision != goModRev {
+			fmt.Fprintf(os.Stderr, "version consistency mismatch:\n  go.mod:                        %s\n  analyzer.UpstreamBaseRevision: %s\n  upstream.json base_revision:   %s\n",
+				goModRev, adtBaseRevision, cfg.BaseRevision)
 			os.Exit(1)
 		}
 
@@ -435,7 +464,7 @@ func main() {
 	case "local":
 		isLocal = true
 		targetRevision = strings.Fields(runtime.Version())[0]
-	case "":
+	case "latest":
 		isLocal = false
 		tag, err := getLatestReleaseTag(cfg.UpstreamRepo)
 		if err != nil {
@@ -443,6 +472,9 @@ func main() {
 			os.Exit(1)
 		}
 		targetRevision = tag
+	case "":
+		isLocal = false
+		targetRevision = goModRev
 	default:
 		isLocal = false
 		targetRevision = *targetFlag
@@ -517,7 +549,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if *targetFlag == "" && cfg.BaseRevision != targetRevision {
+	if *targetFlag == "latest" && cfg.BaseRevision != targetRevision {
 		fmt.Fprintf(os.Stderr, "revision mismatch: base_revision (%s) is not the latest official Go release (%s)\n", cfg.BaseRevision, targetRevision)
 		os.Exit(1)
 	}
