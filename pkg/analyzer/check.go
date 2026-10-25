@@ -234,96 +234,11 @@ func (ispt *inspector) inspect(n ast.Node) bool {
 func checkAssign(tinfo *types.Info, col collected, reg *Registry) []augtError {
 	var errs []augtError
 	for _, a := range col.assignStmts {
-		if len(a.Lhs) == len(a.Rhs) {
-			for i, lhs := range a.Lhs {
-				lhsType := tinfo.TypeOf(lhs)
-				if lhsType == nil {
-					continue
-				}
-				sumt := reg.Lookup(lhsType)
-				if sumt == nil {
-					continue
-				}
-				if !sumt.IsPermittedValue(tinfo, reg, a.Rhs[i]) {
-					errs = append(errs, augtError{
-						err: errors.New("invalid assigning: type is not permitted"),
-						pos: a.TokPos,
-					})
-				}
-			}
-		} else if len(a.Lhs) > 1 && len(a.Rhs) == 1 {
-			if rhsTV, ok := tinfo.Types[a.Rhs[0]]; ok && rhsTV.Type != nil {
-				if tuple, ok := rhsTV.Type.(*types.Tuple); ok {
-					for i, lhs := range a.Lhs {
-						if i >= tuple.Len() {
-							break
-						}
-						lhsType := tinfo.TypeOf(lhs)
-						if lhsType == nil {
-							continue
-						}
-						sumt := reg.Lookup(lhsType)
-						if sumt == nil {
-							continue
-						}
-						elemType := tuple.At(i).Type()
-						if !sumt.IsPermittedType(reg, elemType) {
-							errs = append(errs, augtError{
-								err: errors.New("invalid assigning: type is not permitted"),
-								pos: a.TokPos,
-							})
-						}
-					}
-				}
-			}
-		}
+		errs = append(errs, assignVars(tinfo, reg, a)...)
 	}
-	for _, a := range col.declAssigns {
-		if len(a.Names) == len(a.Values) {
-			for i, n := range a.Names {
-				lhsType := tinfo.TypeOf(n)
-				if lhsType == nil {
-					continue
-				}
-				sumt := reg.Lookup(lhsType)
-				if sumt == nil {
-					continue
-				}
-				if !sumt.IsPermittedValue(tinfo, reg, a.Values[i]) {
-					errs = append(errs, augtError{
-						err: errors.New("invalid declaration: type is not permitted"),
-						pos: a.Pos(),
-					})
-				}
-			}
-		} else if len(a.Names) > 1 && len(a.Values) == 1 {
-			if rhsTV, ok := tinfo.Types[a.Values[0]]; ok && rhsTV.Type != nil {
-				if tuple, ok := rhsTV.Type.(*types.Tuple); ok {
-					for i, n := range a.Names {
-						if i >= tuple.Len() {
-							break
-						}
-						lhsType := tinfo.TypeOf(n)
-						if lhsType == nil {
-							continue
-						}
-						sumt := reg.Lookup(lhsType)
-						if sumt == nil {
-							continue
-						}
-						elemType := tuple.At(i).Type()
-						if !sumt.IsPermittedType(reg, elemType) {
-							errs = append(errs, augtError{
-								err: errors.New("invalid declaration: type is not permitted"),
-								pos: a.Pos(),
-							})
-						}
-					}
-				}
-			}
-		}
+	for _, d := range col.declAssigns {
+		errs = append(errs, initVars(tinfo, reg, d)...)
 	}
-
 	return errs
 }
 
@@ -738,12 +653,8 @@ func checkCompositeLit(tinfo *types.Info, col collected, reg *Registry) []augtEr
 				if kv, ok := elt.(*ast.KeyValueExpr); ok {
 					var fieldType types.Type
 					if kvKeyIdent, ok := kv.Key.(*ast.Ident); ok {
-						for fi := 0; fi < u.NumFields(); fi++ {
-							f := u.Field(fi)
-							if f.Name() == kvKeyIdent.Name {
-								fieldType = f.Type()
-								break
-							}
+						if obj := tinfo.ObjectOf(kvKeyIdent); obj != nil {
+							fieldType = obj.Type()
 						}
 					}
 					if fieldType == nil {

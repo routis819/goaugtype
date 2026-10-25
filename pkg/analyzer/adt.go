@@ -13,7 +13,7 @@ import (
 
 // UpstreamBaseRevision specifies the golang/go release tag that the SumTypeSet
 // implementation in this package is synchronized with.
-const UpstreamBaseRevision = "go1.26.7"
+const UpstreamBaseRevision = "go1.27.3"
 
 func getCanonicalName(t types.Type) string {
 	return types.TypeString(t, func(p *types.Package) string {
@@ -44,112 +44,25 @@ type SumTypeSet struct {
 	Name          *types.TypeName
 	SumType       types.Type       // Named interface type (e.g. Tree)
 	SelfIface     *types.Interface // Underlying interface of SumType
+	tset          _TypeSet         // Ported type set from typeset.go
 	RawTerms      []types.Type     // Direct evaluated union terms before flattening
 	ConcreteTerms []types.Type     // Flattened concrete (non-interface) types
-	IfaceTerms    []types.Type     // Flattened regular (non-sum) interface types (may be *types.Named or *types.Interface)
+	IfaceTerms    []types.Type     // Flattened regular (non-sum) interface types
 	Pos           token.Pos        // Position of the directive comment
 }
 
 func (s *SumTypeSet) ValidateTerms() []augtError {
-	var errs []augtError
-
-	if s.SelfIface != nil && s.SelfIface.NumMethods() > 0 {
-		for _, t := range s.ConcreteTerms {
-			if !types.Implements(t, s.SelfIface) {
-				errs = append(errs, augtError{
-					pos: s.Pos,
-					err: fmt.Errorf("permitted type %s does not implement %s", getCanonicalName(t), getCanonicalName(s.SumType)),
-				})
-			}
-		}
-		for _, t := range s.IfaceTerms {
-			if !types.Implements(t, s.SelfIface) {
-				errs = append(errs, augtError{
-					pos: s.Pos,
-					err: fmt.Errorf("permitted type %s does not implement %s", getCanonicalName(t), getCanonicalName(s.SumType)),
-				})
-			}
-		}
-	}
-
-	// a) No Duplicate Concrete Types
-	for i := 0; i < len(s.ConcreteTerms); i++ {
-		for j := i + 1; j < len(s.ConcreteTerms); j++ {
-			if types.Identical(s.ConcreteTerms[i], s.ConcreteTerms[j]) {
-				errs = append(errs, augtError{
-					pos: s.Pos,
-					err: fmt.Errorf("duplicate concrete type %s in sum type %s", getCanonicalName(s.ConcreteTerms[i]), getCanonicalName(s.SumType)),
-				})
-			}
-		}
-	}
-
-	// b) No Empty Interface Terms (any / interface{})
-	for _, it := range s.IfaceTerms {
-		iface, ok := it.Underlying().(*types.Interface)
-		if !ok || iface.NumMethods() == 0 {
-			errs = append(errs, augtError{
-				pos: s.Pos,
-				err: fmt.Errorf("empty interface %s is not permitted in sum type %s", getCanonicalName(it), getCanonicalName(s.SumType)),
-			})
-		}
-	}
-
-	// c) No Concrete Term Implementing a Regular Interface Term (C ⊂ I)
-	for _, ct := range s.ConcreteTerms {
-		for _, it := range s.IfaceTerms {
-			if iface, ok := it.Underlying().(*types.Interface); ok && iface.NumMethods() > 0 {
-				if types.Implements(ct, iface) {
-					errs = append(errs, augtError{
-						pos: s.Pos,
-						err: fmt.Errorf("overlapping union terms: %s already implements %s in sum type %s", getCanonicalName(ct), getCanonicalName(it), getCanonicalName(s.SumType)),
-					})
-				}
-			}
-		}
-	}
-
-	// d) No Overlapping Regular Interface Terms (I1 ⊆ I2 or I2 ⊆ I1)
-	for i := 0; i < len(s.IfaceTerms); i++ {
-		for j := i + 1; j < len(s.IfaceTerms); j++ {
-			it1, it2 := s.IfaceTerms[i], s.IfaceTerms[j]
-			iface1, ok1 := it1.Underlying().(*types.Interface)
-			iface2, ok2 := it2.Underlying().(*types.Interface)
-			if ok1 && ok2 && iface1.NumMethods() > 0 && iface2.NumMethods() > 0 {
-				if types.Implements(it1, iface2) || types.Implements(it2, iface1) {
-					errs = append(errs, augtError{
-						pos: s.Pos,
-						err: fmt.Errorf("overlapping interface terms %s and %s in sum type %s", getCanonicalName(it1), getCanonicalName(it2), getCanonicalName(s.SumType)),
-					})
-				}
-			}
-		}
-	}
-
-	return errs
+	return nil
 }
 
 func (s *SumTypeSet) Includes(v types.Type) bool {
-	if v == nil {
+	if s == nil || v == nil {
 		return false
 	}
 	if types.Identical(v, s.SumType) {
 		return true
 	}
-	for _, ct := range s.ConcreteTerms {
-		if types.Identical(v, ct) {
-			return true
-		}
-	}
-	for _, it := range s.IfaceTerms {
-		if types.Identical(v, it) {
-			return true
-		}
-		if iface, ok := it.Underlying().(*types.Interface); ok && types.Implements(v, iface) {
-			return true
-		}
-	}
-	return false
+	return s.tset.terms.includes(v)
 }
 
 func (s *SumTypeSet) SubsetOf(other *SumTypeSet) bool {
@@ -159,53 +72,25 @@ func (s *SumTypeSet) SubsetOf(other *SumTypeSet) bool {
 	if types.Identical(s.SumType, other.SumType) {
 		return true
 	}
-	for _, ct := range s.ConcreteTerms {
-		if !other.Includes(ct) {
-			return false
-		}
-	}
-	for _, it := range s.IfaceTerms {
-		if !other.Includes(it) {
-			return false
-		}
-	}
-	return true
+	return s.tset.subsetOf(&other.tset)
 }
 
 func (s *SumTypeSet) IsPermittedType(reg *Registry, valType types.Type) bool {
 	if s == nil || valType == nil {
 		return false
 	}
-	if types.Identical(valType, types.Typ[types.UntypedNil]) {
-		return true
-	}
-	valType = types.Default(valType)
-	if s.Includes(valType) {
-		return true
-	}
 	if reg != nil {
-		if rhsSum := reg.Lookup(valType); rhsSum != nil {
-			return rhsSum.SubsetOf(s)
-		}
+		return reg.implements(valType, s.SumType, false, nil)
 	}
-	return false
+	return s.Includes(valType)
 }
 
 func (s *SumTypeSet) IsPermittedValue(tinfo *types.Info, reg *Registry, expr ast.Expr) bool {
 	if s == nil || expr == nil || tinfo == nil {
 		return false
 	}
-	tv, ok := tinfo.Types[expr]
-	if !ok {
-		return false
-	}
-	if tv.IsNil() {
-		return true
-	}
-	if tv.Type == nil {
-		return false
-	}
-	return s.IsPermittedType(reg, tv.Type)
+	x := newOperand(tinfo, expr)
+	return x.assignableTo(reg, s.SumType, nil)
 }
 
 func (s *SumTypeSet) IsPermittedCaseType(reg *Registry, caseType types.Type) bool {
@@ -215,7 +100,7 @@ func (s *SumTypeSet) IsPermittedCaseType(reg *Registry, caseType types.Type) boo
 	if reg != nil && reg.Lookup(caseType) != nil {
 		return false
 	}
-	return s.Includes(caseType)
+	return s.tset.terms.includes(caseType)
 }
 
 type Registry struct {
@@ -318,10 +203,19 @@ func (r *Registry) Lookup(t types.Type) *SumTypeSet {
 						selfIface = iface
 					}
 
+					var terms termlist
+					for _, ct := range concreteTerms {
+						terms = append(terms, &term{tilde: false, typ: ct})
+					}
+					for _, it := range ifaceTerms {
+						terms = append(terms, &term{tilde: false, typ: it})
+					}
+
 					newSet := &SumTypeSet{
 						Name:          obj,
 						SumType:       named,
 						SelfIface:     selfIface,
+						tset:          _TypeSet{selfIface: selfIface, terms: terms.norm()},
 						ConcreteTerms: concreteTerms,
 						IfaceTerms:    ifaceTerms,
 						Pos:           obj.Pos(),
@@ -413,34 +307,21 @@ func BuildRegistry(pass *analysis.Pass, rawDecls []goAugADTDecl) (*Registry, []a
 		})
 	}
 
-	// Pass 2: Flatten nested sum types and separate concrete vs regular interface terms
+	// Pass 2: Compute _TypeSet and validate union terms via computeUnionTypeSet
 	for _, s := range reg.sets {
-		visited := make(map[string]bool)
-		visited[getCanonicalName(s.SumType)] = true
+		tset, valErrs := computeUnionTypeSet(reg, s.Pos, s.SumType, s.SelfIface, s.RawTerms)
+		s.tset = *tset
+		errs = append(errs, valErrs...)
 
-		var expand func(terms []types.Type)
-		expand = func(terms []types.Type) {
-			for _, t := range terms {
-				if nested := reg.Lookup(t); nested != nil {
-					cName := getCanonicalName(nested.SumType)
-					if visited[cName] {
-						continue
-					}
-					visited[cName] = true
-					expand(nested.RawTerms)
-					delete(visited, cName)
-				} else if types.IsInterface(t) {
-					s.IfaceTerms = append(s.IfaceTerms, t)
+		for _, t := range s.tset.terms {
+			if t != nil && t.typ != nil {
+				if types.IsInterface(t.typ) {
+					s.IfaceTerms = append(s.IfaceTerms, t.typ)
 				} else {
-					s.ConcreteTerms = append(s.ConcreteTerms, t)
+					s.ConcreteTerms = append(s.ConcreteTerms, t.typ)
 				}
 			}
 		}
-
-		expand(s.RawTerms)
-
-		valErrs := s.ValidateTerms()
-		errs = append(errs, valErrs...)
 
 		if len(valErrs) == 0 && shouldExportFact(pass, s) {
 			var concreteNames []string
