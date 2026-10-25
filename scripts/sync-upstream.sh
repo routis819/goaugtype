@@ -25,4 +25,4 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
 fi
 
 cd "${PROJECT_ROOT}"
-exec go run ./cmd/upstreamchecker -config upstream.json -update "$@"
+exec go run ./cmd/upstreamchecker -config upstream.json -sync "$@"

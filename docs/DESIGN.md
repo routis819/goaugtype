@@ -166,16 +166,22 @@ type SumTypeSet struct {
 To reliably track whether the 7 reference files in `src/go/types/{typeset,termlist,typeterm,union,instantiate,assignments,operand}.go` (mirrored from `src/cmd/compile/internal/types2/`) change in future Go releases, the repository includes a configuration file, a dedicated CLI tool (`./cmd/upstreamchecker`), and wrapper scripts (`./scripts`):
 
 1. **Baseline Revision Configuration (`upstream.json`) & Code Constant (`analyzer.UpstreamBaseRevision`)**:
-   - `upstream.json` explicitly records the `golang/go` revision (`base_revision`), the list of `tracked_files`, and their SHA-256 `file_hashes` against which `goaugtype`'s type set engine was written.
-   - `pkg/analyzer/adt.go` defines `UpstreamBaseRevision` so the implementation explicitly declares which upstream Go release it is synchronized with.
+   - `go.mod` is the canonical single source of truth for the target Go version.
+   - `upstream.json` records the `golang/go` revision (`base_revision`), the list of `tracked_files`, and their SHA-256 `file_hashes`.
+   - `pkg/analyzer/adt.go` defines `UpstreamBaseRevision` matching `go.mod`.
 2. **Comparison & Verification CLI (`./cmd/upstreamchecker`)**:
-   - A standalone Go tool that resolves GitHub tags using `go/version` and compares SHA-256 file hashes:
-     - **Default (no arguments)**: Queries the `golang/go` repository for the **latest official release tag (`go1.x.y`, excluding `rc`/`beta`)**, verifies that `upstream.json` and `analyzer.UpstreamBaseRevision` match that release tag, and compares all `tracked_files`.
-     - **Explicit Target (`-target <revision>`)**: Compares against a specific tag (e.g., `go1.26.7`), commit SHA, `master` branch, or the local toolchain (`-target local` via `go env GOROOT`).
-     - **Baseline Update (`-update`)**: Updates `base_revision` and `file_hashes` in `upstream.json` after upstream changes have been reviewed.
+   - A standalone Go tool that compares SHA-256 file hashes across local files and remote GitHub tags:
+     - **Default (no arguments)**: Compares against the Go version declared in `go.mod`, enforcing 5-way consistency.
+     - **Latest Release (`-target latest`)**: Resolves the latest official release tag (`go1.x.y`) from `golang/go` on GitHub.
+     - **Local Toolchain (`-target local`)**: Compares against local `$(go env GOROOT)/src/go/types`.
+     - **Explicit Target (`-target <revision>`)**: Compares against a specific tag or commit SHA.
+     - **Synchronization (`-sync`)**: Synchronizes pristine snapshots, updates `base_revision` and `file_hashes` in `upstream.json`, applies patches via 3-way merge, and refreshes patches.
 3. **Automation & Release Verification Scripts (`./scripts`)**:
-   - `./scripts/check-upstream.sh`: Invokes `./cmd/upstreamchecker` for local verification or scheduled CI jobs.
-   - `./scripts/release.sh`: Release gatekeeper script that requires a clean working tree, `base_revision` consistency, synchronization with the latest official Go release tag, and passing `go test ./...` before creating a release tag.
+   - `./scripts/check-upstream.sh`: Invokes `./cmd/upstreamchecker` to verify 5-way consistency and patch drift.
+   - `./scripts/apply-patches.sh`: Applies unified patches onto pristine snapshots to regenerate `pkg/analyzer/*.go`.
+   - `./scripts/update-patches.sh`: Updates patches from local edits in `pkg/analyzer/*.go`.
+   - `./scripts/sync-upstream.sh`: Synchronizes upstream snapshots and `upstream.json` with `go.mod` via `./cmd/upstreamchecker -sync`.
+   - `./scripts/release.sh`: Release gatekeeper script enforcing clean working tree, 5-way consistency, and passing test suite.
 
 ---
 
