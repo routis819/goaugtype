@@ -1,0 +1,310 @@
+diff --git a/union.go b/union.go
+index 3f7efdf..f198024 100644
+--- a/union.go
++++ b/union.go
+@@ -2,199 +2,138 @@
+ // Use of this source code is governed by a BSD-style
+ // license that can be found in the LICENSE file.
+ 
+-package types
++package analyzer
+ 
+ import (
+-	"go/ast"
++	"fmt"
+ 	"go/token"
+-	. "internal/types/errors"
++	"go/types"
++	"strings"
+ )
+ 
+-// ----------------------------------------------------------------------------
+-// API
+-
+-// A Union represents a union of terms embedded in an interface.
+-type Union struct {
+-	terms []*Term // list of syntactical terms (not a canonicalized termlist)
+-}
+-
+-// NewUnion returns a new [Union] type with the given terms.
+-// It is an error to create an empty union; they are syntactically not possible.
+-func NewUnion(terms []*Term) *Union {
+-	if len(terms) == 0 {
+-		panic("empty union")
++// parseTilde validates that ~T syntax is not used in sum types.
++// Ported from src/go/types/union.go (lines 139–165).
++// [goaugtype] As specified in #57644, underlying type syntax ~T is not permitted in sum types.
++func parseTilde(pos token.Pos, termStr string) (string, error) {
++	if strings.HasPrefix(termStr, "~") {
++		return "", fmt.Errorf("underlying type syntax %s is not permitted in sum types", termStr)
+ 	}
+-	return &Union{terms}
++	return termStr, nil
+ }
+ 
+-func (u *Union) Len() int         { return len(u.terms) }
+-func (u *Union) Term(i int) *Term { return u.terms[i] }
+-
+-func (u *Union) Underlying() Type { return u }
+-func (u *Union) String() string   { return TypeString(u, nil) }
+-
+-// A Term represents a term in a [Union].
+-type Term term
+-
+-// NewTerm returns a new union term.
+-func NewTerm(tilde bool, typ Type) *Term { return &Term{tilde, typ} }
+-
+-func (t *Term) Tilde() bool    { return t.tilde }
+-func (t *Term) Type() Type     { return t.typ }
+-func (t *Term) String() string { return (*term)(t).String() }
+-
+-// ----------------------------------------------------------------------------
+-// Implementation
+-
+-// Avoid excessive type-checking times due to quadratic termlist operations.
+-const maxTermCount = 100
+-
+-// parseUnion parses uexpr as a union of expressions.
+-// The result is a Union type, or Typ[Invalid] for some errors.
+-func parseUnion(check *Checker, uexpr ast.Expr) Type {
+-	blist, tlist := flattenUnion(nil, uexpr)
+-	assert(len(blist) == len(tlist)-1)
+-
+-	var terms []*Term
+-
+-	var u Type
+-	for i, x := range tlist {
+-		term := parseTilde(check, x)
+-		if len(tlist) == 1 && !term.tilde {
+-			// Single type. Ok to return early because all relevant
+-			// checks have been performed in parseTilde (no need to
+-			// run through term validity check below).
+-			return term.typ // typ already recorded through check.typ in parseTilde
++// overlappingTerm reports the index of the term x in terms which is
++// overlapping (not disjoint) from y. The result is < 0 if there is no such term.
++// Ported from src/go/types/union.go (lines 171–189).
++// [goaugtype] Under the Disjoint Union Invariant of #57644, we run
++// !x.disjoint(y) across ALL flattened leaf terms (both concrete types and regular interfaces).
++func overlappingTerm(terms []*term, y *term) int {
++	for i, x := range terms {
++		if x == nil || x.typ == nil || y == nil || y.typ == nil {
++			continue
+ 		}
+-		if len(terms) >= maxTermCount {
+-			if isValid(u) {
+-				check.errorf(x, InvalidUnion, "cannot handle more than %d union terms (implementation limitation)", maxTermCount)
+-				u = Typ[Invalid]
+-			}
+-		} else {
+-			terms = append(terms, term)
+-			u = &Union{terms}
++		if !x.disjoint(y) {
++			return i
+ 		}
++	}
++	return -1
++}
+ 
+-		if i > 0 {
+-			check.recordTypeAndValue(blist[i-1], typexpr, u, nil)
++// computeUnionTypeSet computes the _TypeSet for a sum type and validates union terms.
++// Ported and adapted from src/go/types/typeset.go (lines 375–415) and union.go (lines 91–134).
++func computeUnionTypeSet(reg *Registry, pos token.Pos, sumType types.Type, selfIface *types.Interface, rawTerms []types.Type) (*_TypeSet, []augtError) {
++	var errs []augtError
++
++	// 1. Method set validation (#9)
++	if selfIface != nil && selfIface.NumMethods() > 0 {
++		for _, t := range rawTerms {
++			if !types.Implements(t, selfIface) {
++				errs = append(errs, augtError{
++					pos: pos,
++					err: fmt.Errorf("permitted type %s does not implement %s", getCanonicalName(t), getCanonicalName(sumType)),
++				})
++			}
+ 		}
+ 	}
+ 
+-	if !isValid(u) {
+-		return u
+-	}
++	// 2. Syntactic term flattening & validation
++	visited := make(map[string]bool)
++	visited[getCanonicalName(sumType)] = true
+ 
+-	// Check validity of terms.
+-	// Do this check later because it requires types to be set up.
+-	// Note: This is a quadratic algorithm, but unions tend to be short.
+-	check.later(func() {
+-		for i, t := range terms {
+-			if !isValid(t.typ) {
++	var leafTerms []*term
++	var expand func(terms []types.Type)
++	expand = func(terms []types.Type) {
++		for _, t := range terms {
++			if t == nil {
+ 				continue
+ 			}
+-
+-			u := t.typ.Underlying()
+-			f, _ := u.(*Interface)
+-			if t.tilde {
+-				if f != nil {
+-					check.errorf(tlist[i], InvalidUnion, "invalid use of ~ (%s is an interface)", t.typ)
+-					continue // don't report another error for t
+-				}
+-
+-				if !Identical(u, t.typ) {
+-					check.errorf(tlist[i], InvalidUnion, "invalid use of ~ (underlying type of %s is %s)", t.typ, u)
++			// [goaugtype] If t is a nested sum type in reg, expand its leaf terms
++			if nested := reg.Lookup(t); nested != nil {
++				cName := getCanonicalName(nested.SumType)
++				if visited[cName] {
+ 					continue
+ 				}
+-			}
+-
+-			// Stand-alone embedded interfaces are ok and are handled by the single-type case
+-			// in the beginning. Embedded interfaces with tilde are excluded above. If we reach
+-			// here, we must have at least two terms in the syntactic term list (but not necessarily
+-			// in the term list of the union's type set).
+-			if f != nil {
+-				tset := f.typeSet()
+-				switch {
+-				case tset.NumMethods() != 0:
+-					check.errorf(tlist[i], InvalidUnion, "cannot use %s in union (%s contains methods)", t, t)
+-				case t.typ == universeComparable.Type():
+-					check.error(tlist[i], InvalidUnion, "cannot use comparable in union")
+-				case tset.comparable:
+-					check.errorf(tlist[i], InvalidUnion, "cannot use %s in union (%s embeds comparable)", t, t)
++				visited[cName] = true
++				expand(nested.RawTerms)
++				delete(visited, cName)
++			} else if iface, ok := t.Underlying().(*types.Interface); ok {
++				// [goaugtype] Reject empty interface terms (any / interface{})
++				if iface.NumMethods() == 0 {
++					errs = append(errs, augtError{
++						pos: pos,
++						err: fmt.Errorf("empty interface %s is not permitted in sum type %s", getCanonicalName(t), getCanonicalName(sumType)),
++					})
++				} else {
++					// [goaugtype] Preserve regular non-empty interface term as a distinct term
++					leafTerms = append(leafTerms, &term{tilde: false, typ: t})
+ 				}
+-				continue // terms with interface types are not subject to the no-overlap rule
+-			}
+-
+-			// Report overlapping (non-disjoint) terms such as
+-			// a|a, a|~a, ~a|~a, and ~a|A (where under(A) == a).
+-			if j := overlappingTerm(terms[:i], t); j >= 0 {
+-				check.softErrorf(tlist[i], InvalidUnion, "overlapping terms %s and %s", t, terms[j])
++			} else {
++				leafTerms = append(leafTerms, &term{tilde: false, typ: t})
+ 			}
+ 		}
+-	}).describef(uexpr, "check term validity %s", uexpr)
+-
+-	return u
+-}
+-
+-func parseTilde(check *Checker, tx ast.Expr) *Term {
+-	x := tx
+-	var tilde bool
+-	if op, _ := x.(*ast.UnaryExpr); op != nil && op.Op == token.TILDE {
+-		x = op.X
+-		tilde = true
+-	}
+-	typ := check.typ(x)
+-	// Embedding stand-alone type parameters is not permitted (go.dev/issue/47127).
+-	// We don't need this restriction anymore if we make the underlying type of a type
+-	// parameter its constraint interface: if we embed a lone type parameter, we will
+-	// simply use its underlying type (like we do for other named, embedded interfaces),
+-	// and since the underlying type is an interface the embedding is well defined.
+-	if isTypeParam(typ) {
+-		if tilde {
+-			check.errorf(x, MisplacedTypeParam, "type in term %s cannot be a type parameter", tx)
+-		} else {
+-			check.error(x, MisplacedTypeParam, "term cannot be a type parameter")
+-		}
+-		typ = Typ[Invalid]
+-	}
+-	term := NewTerm(tilde, typ)
+-	if tilde {
+-		check.recordTypeAndValue(tx, typexpr, &Union{[]*Term{term}}, nil)
+ 	}
+-	return term
+-}
+-
+-// overlappingTerm reports the index of the term x in terms which is
+-// overlapping (not disjoint) from y. The result is < 0 if there is no
+-// such term. The type of term y must not be an interface, and terms
+-// with an interface type are ignored in the terms list.
+-func overlappingTerm(terms []*Term, y *Term) int {
+-	assert(!IsInterface(y.typ))
+-	for i, x := range terms {
+-		if IsInterface(x.typ) {
+-			continue
+-		}
+-		// disjoint requires non-nil, non-top arguments,
+-		// and non-interface types as term types.
+-		if debug {
+-			if x == nil || x.typ == nil || y == nil || y.typ == nil {
+-				panic("empty or top union term")
++	expand(rawTerms)
++
++	// 3. Check pairwise disjointness using overlappingTerm (from union.go)
++	for i, t := range leafTerms {
++		if j := overlappingTerm(leafTerms[:i], t); j >= 0 {
++			prev := leafTerms[j]
++			prevIsIface := types.IsInterface(prev.typ)
++			currIsIface := types.IsInterface(t.typ)
++
++			switch {
++			case !prevIsIface && !currIsIface && types.Identical(prev.typ, t.typ):
++				errs = append(errs, augtError{
++					pos: pos,
++					err: fmt.Errorf("duplicate concrete type %s in sum type %s", getCanonicalName(t.typ), getCanonicalName(sumType)),
++				})
++			case !currIsIface && prevIsIface:
++				errs = append(errs, augtError{
++					pos: pos,
++					err: fmt.Errorf("overlapping union terms: %s already implements %s in sum type %s", getCanonicalName(t.typ), getCanonicalName(prev.typ), getCanonicalName(sumType)),
++				})
++			case currIsIface && !prevIsIface:
++				errs = append(errs, augtError{
++					pos: pos,
++					err: fmt.Errorf("overlapping union terms: %s already implements %s in sum type %s", getCanonicalName(prev.typ), getCanonicalName(t.typ), getCanonicalName(sumType)),
++				})
++			case currIsIface && prevIsIface:
++				errs = append(errs, augtError{
++					pos: pos,
++					err: fmt.Errorf("overlapping interface terms %s and %s in sum type %s", getCanonicalName(prev.typ), getCanonicalName(t.typ), getCanonicalName(sumType)),
++				})
++			default:
++				errs = append(errs, augtError{
++					pos: pos,
++					err: fmt.Errorf("overlapping union terms %s and %s in sum type %s", getCanonicalName(prev.typ), getCanonicalName(t.typ), getCanonicalName(sumType)),
++				})
+ 			}
+ 		}
+-		if !(*term)(x).disjoint((*term)(y)) {
+-			return i
+-		}
+ 	}
+-	return -1
+-}
+ 
+-// flattenUnion walks a union type expression of the form A | B | C | ...,
+-// extracting both the binary exprs (blist) and leaf types (tlist).
+-func flattenUnion(list []ast.Expr, x ast.Expr) (blist, tlist []ast.Expr) {
+-	if o, _ := x.(*ast.BinaryExpr); o != nil && o.Op == token.OR {
+-		blist, tlist = flattenUnion(list, o.X)
+-		blist = append(blist, o)
+-		x = o.Y
++	tset := &_TypeSet{
++		selfIface: selfIface,
++		terms:     termlist(leafTerms).norm(),
+ 	}
+-	return blist, append(tlist, x)
++
++	return tset, errs
+ }

@@ -10,8 +10,8 @@ For detailed language specifications and rationale aligned with [golang/go#57644
 
 `goaugtype` is structured into three primary layers:
 1. **CLI & Driver Layer (`cmd/goaugadt`)**: Wraps the analyzer with `golang.org/x/tools/go/analysis/singlechecker` for standalone CLI execution and standard linter integration.
-2. **Core Analysis Engine (`pkg/analyzer`)**: Implements the two-pass AST/type-set static analyzer ([`adt.go`](../pkg/analyzer/adt.go), [`check.go`](../pkg/analyzer/check.go), and the `go/types`-ported engine files [`typeterm.go`](../pkg/analyzer/typeterm.go), [`termlist.go`](../pkg/analyzer/termlist.go), [`typeset.go`](../pkg/analyzer/typeset.go), and [`assignments.go`](../pkg/analyzer/assignments.go)).
-3. **Upstream Synchronization & Release Gatekeeper (`cmd/upstreamchecker`, `scripts/`, `upstream.json`)**: Ensures the `SumTypeSet` and assignment engine stays synchronized with Go's standard library `src/go/types` across Go releases.
+2. **Core Analysis Engine (`pkg/analyzer`)**: Implements the two-pass AST/type-set static analyzer ([`adt.go`](../pkg/analyzer/adt.go), [`check.go`](../pkg/analyzer/check.go), and the 7 `go/types`-ported files [`typeterm.go`](../pkg/analyzer/typeterm.go), [`termlist.go`](../pkg/analyzer/termlist.go), [`typeset.go`](../pkg/analyzer/typeset.go), [`union.go`](../pkg/analyzer/union.go), [`instantiate.go`](../pkg/analyzer/instantiate.go), [`operand.go`](../pkg/analyzer/operand.go), and [`assignments.go`](../pkg/analyzer/assignments.go)).
+3. **Upstream Synchronization, Patch Pipeline & Release Gatekeeper (`cmd/upstreamchecker`, `internal/upstream/`, `Makefile`, `scripts/`, `upstream.json`)**: Keeps pristine `src/go/types` snapshots in `internal/upstream/testdata/gotypes/`, applies unified diffs from `internal/upstream/patches/` via `go generate` (`make generate`), and enforces drift-free synchronization across Go releases.
 
 ![Architecture Topology](./diagrams/architecture-topology.svg)
 *Source: [`docs/diagrams/architecture-topology.d2`](./docs/diagrams/architecture-topology.d2)*
@@ -268,27 +268,29 @@ sequenceDiagram
 
 ---
 
-## 7. Upstream `go/types` Synchronization & Release Gatekeeper
+## 7. Upstream `go/types` Synchronization, Patch Pipeline & Release Gatekeeper
 
-To ensure the ported `go/types` engine files stay aligned with upstream `golang/go` changes to `src/go/types`, `cmd/upstreamchecker` and `scripts/release.sh` enforce a 3-way consistency check across all 7 tracked files before any release tag is created:
+To keep the 7 ported `go/types` files maintainable and verifiable, `goaugtype` stores unmodified upstream snapshots in [`internal/upstream/testdata/gotypes/`](../internal/upstream/testdata/gotypes) and unified diff patches in [`internal/upstream/patches/`](../internal/upstream/patches). `cmd/upstreamchecker`, `Makefile`, and `scripts/release.sh` enforce a 4-way consistency check (code constant ↔ `upstream.json` ↔ local pristine snapshots + patches ↔ latest upstream Go release):
 
-| Upstream `golang/go` Source | Ported `pkg/analyzer` Target | Purpose |
-| :--- | :--- | :--- |
-| `src/go/types/typeterm.go` | [`pkg/analyzer/typeterm.go`](../pkg/analyzer/typeterm.go) | Single type term operations (`includes`, `subsetOf`, `disjoint`, `union`, `intersect`) with interface support |
-| `src/go/types/termlist.go` | [`pkg/analyzer/termlist.go`](../pkg/analyzer/termlist.go) | Normalized term list set algebra (`norm`, `includes`, `supersetOf`, `subsetOf`) |
-| `src/go/types/typeset.go` | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `_TypeSet` representation, method set lookup, and `computeInterfaceTypeSet` |
-| `src/go/types/union.go` | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | Union term parsing (`parseTilde`), pairwise disjointness (`overlappingTerm`), and nested sum type flattening (`computeUnionTypeSet`) |
-| `src/go/types/instantiate.go` | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `implements` verification (method set satisfaction + `_TypeSet` inclusion/subset check) |
-| `src/go/types/operand.go` | [`pkg/analyzer/assignments.go`](../pkg/analyzer/assignments.go) | `operand` representation and `assignableTo` with `Registry` sum type hook |
-| `src/go/types/assignments.go` | [`pkg/analyzer/assignments.go`](../pkg/analyzer/assignments.go) | 1:1 and multi-value tuple (`unpackRecv`) assignment verification (`initVars`, `assignVars`, `returnVars`) |
+| Upstream `golang/go` Source | Pristine Snapshot | Patch File | Ported `pkg/analyzer` Target | Purpose |
+| :--- | :--- | :--- | :--- | :--- |
+| `src/go/types/typeterm.go` | [`gotypes/typeterm.go`](../internal/upstream/testdata/gotypes/typeterm.go) | [`typeterm.patch`](../internal/upstream/patches/typeterm.patch) | [`pkg/analyzer/typeterm.go`](../pkg/analyzer/typeterm.go) | Single type term operations (`includes`, `subsetOf`, `disjoint`, `union`, `intersect`) with interface support |
+| `src/go/types/termlist.go` | [`gotypes/termlist.go`](../internal/upstream/testdata/gotypes/termlist.go) | [`termlist.patch`](../internal/upstream/patches/termlist.patch) | [`pkg/analyzer/termlist.go`](../pkg/analyzer/termlist.go) | Normalized term list set algebra (`norm`, `includes`, `supersetOf`, `subsetOf`) |
+| `src/go/types/typeset.go` | [`gotypes/typeset.go`](../internal/upstream/testdata/gotypes/typeset.go) | [`typeset.patch`](../internal/upstream/patches/typeset.patch) | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `_TypeSet` representation, method set lookup, and `computeInterfaceTypeSet` |
+| `src/go/types/union.go` | [`gotypes/union.go`](../internal/upstream/testdata/gotypes/union.go) | [`union.patch`](../internal/upstream/patches/union.patch) | [`pkg/analyzer/union.go`](../pkg/analyzer/union.go) | Union term parsing (`parseTilde`), pairwise disjointness (`overlappingTerm`), and nested sum type flattening (`computeUnionTypeSet`) |
+| `src/go/types/instantiate.go` | [`gotypes/instantiate.go`](../internal/upstream/testdata/gotypes/instantiate.go) | [`instantiate.patch`](../internal/upstream/patches/instantiate.patch) | [`pkg/analyzer/instantiate.go`](../pkg/analyzer/instantiate.go) | `implements` verification (method set satisfaction + `_TypeSet` inclusion/subset check) |
+| `src/go/types/operand.go` | [`gotypes/operand.go`](../internal/upstream/testdata/gotypes/operand.go) | [`operand.patch`](../internal/upstream/patches/operand.patch) | [`pkg/analyzer/operand.go`](../pkg/analyzer/operand.go) | `operand` representation and `assignableTo` with `Registry` sum type hook |
+| `src/go/types/assignments.go` | [`gotypes/assignments.go`](../internal/upstream/testdata/gotypes/assignments.go) | [`assignments.patch`](../internal/upstream/patches/assignments.patch) | [`pkg/analyzer/assignments.go`](../pkg/analyzer/assignments.go) | 1:1 and multi-value tuple (`unpackRecv`) assignment verification (`initVars`, `assignVars`, `returnVars`) |
 
 ```mermaid
 flowchart LR
     subgraph Repo["goaugtype Repository"]
-        AdtConst["pkg/analyzer/adt.go<br/>UpstreamBaseRevision"]
-        Ported["pkg/analyzer/<br/>{typeterm,termlist,typeset,assignments}.go"]
+        AdtConst["pkg/analyzer/adt.go<br/>UpstreamBaseRevision + //go:generate"]
+        Snapshots["internal/upstream/testdata/gotypes/<br/>7 Pristine go/types Files"]
+        Patches["internal/upstream/patches/<br/>7 Unified Diff (.patch) Files"]
+        Ported["pkg/analyzer/<br/>{typeterm,termlist,typeset,union,<br/>instantiate,operand,assignments}.go"]
         Config["upstream.json<br/>base_revision + 7 file_hashes"]
-        ReleaseSh["scripts/release.sh"]
+        ReleaseSh["Makefile & scripts/release.sh"]
     end
 
     subgraph Upstream["golang/go (GitHub / Local GOROOT)"]
@@ -296,11 +298,12 @@ flowchart LR
         Files["src/go/types/<br/>{typeset,termlist,typeterm,union,<br/>instantiate,assignments,operand}.go"]
     end
 
-    ReleaseSh -->|"1. Verify clean git tree"| Repo
-    ReleaseSh -->|"2. Check base_revision"| Config
+    Snapshots -->|"git apply --3way<br/>(make generate)"| Ported
+    Patches -->|"git apply --3way"| Ported
+    Ported -. "git diff --no-index<br/>(make update-patches)" .-> Patches
+    ReleaseSh -->|"1. Verify clean tree & patch drift"| Ported
     AdtConst <-->|"Must equal"| Config
-    Ported -. "ported from" .-> Files
-    ReleaseSh -->|"3. Check latest Go release"| Tags
+    Snapshots <-->|"SHA-256 must equal"| Config
     Config <-->|"Must equal latest tag & SHA-256"| Files
-    ReleaseSh -->|"4. go test -v ./..."| Repo
+    ReleaseSh -->|"2. Check latest Go release"| Tags
 ```
