@@ -56,36 +56,20 @@ else
   fi
 fi
 
-# Step 2: Verify implementation and upstream.json match configured base_revision.
-echo "==> Step 2: Verifying base_revision consistency..."
-BASE_REVISION="$(grep '"base_revision"' upstream.json | sed -E 's/.*"base_revision":[[:space:]]*"([^"]+)".*/\1/')"
-if [[ -z "$BASE_REVISION" ]]; then
-  echo "Error: Could not extract base_revision from upstream.json" >&2
-  exit 1
-fi
-echo "Configured base_revision: ${BASE_REVISION}"
-if ! ./scripts/check-upstream.sh -target "${BASE_REVISION}"; then
-  echo "Error: Step 2 verification failed: tracked files or implementation mismatch base_revision (${BASE_REVISION})." >&2
-  FAILED=1
-  if [[ "$CHECK_ONLY" == false ]]; then
-    exit 1
-  fi
-fi
-
-# Step 3: Verify upstream.json and implementation match latest official Go release tag.
-echo "==> Step 3: Verifying synchronization with latest official Go release..."
+# Step 2: Verify 5-way upstream consistency (go.mod ↔ UpstreamBaseRevision ↔ upstream.json ↔ snapshots + patches ↔ upstream golang/go).
+echo "==> Step 2: Verifying 5-way upstream consistency..."
 if ! ./scripts/check-upstream.sh; then
-  echo "Warning/Error: Step 3 verification failed: repository is not synchronized with latest official Go release." >&2
+  echo "Error: Step 2 verification failed: 5-way upstream consistency check failed." >&2
   FAILED=1
   if [[ "$CHECK_ONLY" == false ]]; then
     exit 1
   fi
 fi
 
-# Step 4: Run full test suite.
-echo "==> Step 4: Running test suite..."
+# Step 3: Run full test suite.
+echo "==> Step 3: Running test suite..."
 if ! go test -v ./...; then
-  echo "Error: Step 4 test suite failed." >&2
+  echo "Error: Step 3 test suite failed." >&2
   FAILED=1
   if [[ "$CHECK_ONLY" == false ]]; then
     exit 1
@@ -103,8 +87,8 @@ if [[ "$CHECK_ONLY" == true ]]; then
   exit 0
 fi
 
-# Step 5: Create annotated git tag.
-echo "==> Step 5: Creating annotated git tag ${TAG}..."
+# Step 4: Create annotated git tag.
+echo "==> Step 4: Creating annotated git tag ${TAG}..."
 git tag -a "${TAG}" -m "Release ${TAG}"
 echo "Successfully tagged release ${TAG}."
 echo ""
