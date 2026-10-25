@@ -386,7 +386,7 @@ func getAnalyzerUpstreamBaseRevision(rootDir string) (string, error) {
 func main() {
 	configPath := flag.String("config", "upstream.json", "path to config file")
 	targetFlag := flag.String("target", "", "target revision to compare against (empty for go.mod version, 'latest' for latest official release, 'local' for GOROOT, or explicit tag/branch/commit)")
-	updateFlag := flag.Bool("update", false, "update base_revision and file_hashes in config file with target values")
+	syncFlag := flag.Bool("sync", false, "synchronize local upstream snapshots, upstream.json, and ported files with the target revision")
 	applyPatchesFlag := flag.Bool("apply-patches", false, "apply upstream patches to pkg/analyzer")
 	updatePatchesFlag := flag.Bool("update-patches", false, "generate/update upstream patches from pkg/analyzer")
 	flag.Parse()
@@ -434,7 +434,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if !*updateFlag {
+	if !*syncFlag {
 		adtBaseRevision, err := getAnalyzerUpstreamBaseRevision(rootDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error checking UpstreamBaseRevision: %v\n", err)
@@ -494,7 +494,7 @@ func main() {
 		fetchedData[file] = data
 	}
 
-	if *updateFlag {
+	if *syncFlag {
 		for _, file := range cfg.TrackedFiles {
 			base := filepath.Base(file)
 			snapshotFile := filepath.Join(snapshotDir, base)
@@ -511,10 +511,10 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Error saving config: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Printf("Updated %s: base_revision=%s with %d tracked file hashes.\n", *configPath, cfg.BaseRevision, len(targetHashes))
+		fmt.Printf("Synchronized %s: base_revision=%s with %d tracked file hashes.\n", *configPath, cfg.BaseRevision, len(targetHashes))
 
 		if err := applyPatches(snapshotDir, patchesDir, portedDir, cfg.TrackedFiles); err != nil {
-			fmt.Fprintf(os.Stderr, "Error applying patches after update: %v\n", err)
+			fmt.Fprintf(os.Stderr, "Error applying patches after sync: %v\n", err)
 			os.Exit(1)
 		}
 		os.Exit(0)

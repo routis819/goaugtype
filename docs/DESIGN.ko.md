@@ -168,16 +168,22 @@ type SumTypeSet struct {
 참조 원본인 7개 파일 `src/go/types/{typeset,termlist,typeterm,union,instantiate,assignments,operand}.go`(원본 소스: `src/cmd/compile/internal/types2/`)가 향후 Go 버전에서 변경되었는지 정확하고 안정적으로 추적하기 위해 설정 파일과 전용 CLI 도구(`./cmd/upstreamchecker`), 그리고 래퍼 스크립트(`./scripts`)로 구성된 체계를 구축합니다:
 
 1. **기준 리비전 설정 파일 (`upstream.json`) 및 코드 상수 (`analyzer.UpstreamBaseRevision`)**:
-   - `upstream.json`에 현재 `goaugtype`의 타입 셋 코드가 `golang/go`의 어느 리비전(`base_revision`)을 기준으로 작성되었는지와 감시 대상 파일 목록(`tracked_files`) 및 각 파일의 해시를 프로젝트 내에 명시적으로 기록합니다.
-   - `pkg/analyzer/adt.go`에 `UpstreamBaseRevision` 상수를 선언하여 실제 구현 코드가 동기화된 업스트림 버전을 명시합니다.
+   - `go.mod`의 `go` 지시자가 기준 버전의 단일 진실 공급원입니다.
+   - `upstream.json`에 `golang/go`의 기준 리비전(`base_revision`), 감시 대상 파일 목록(`tracked_files`) 및 각 파일의 해시를 프로젝트 내에 명시적으로 기록합니다.
+   - `pkg/analyzer/adt.go`에 `UpstreamBaseRevision` 상수를 선언하여 `go.mod` 버전과 동기화합니다.
 2. **비교 및 검증 CLI 도구 (`./cmd/upstreamchecker`)**:
    - 쉘 스크립트로는 처리하기 까다로운 GitHub API/Git 태그 해석, 파일별 해시 대조를 수행하는 Go 프로그램입니다.
-   - **기본 실행 (인자 없음)**: `golang/go`의 **최신 정식 릴리즈 태그(`go1.x.y`, `rc`/`beta` 제외)**를 자동으로 찾아 `upstream.json`, `analyzer.UpstreamBaseRevision`, 그리고 `tracked_files` 해시가 모두 최신 정식 릴리즈와 일치하는지 비교합니다.
-   - **특정 리비전 지정 (`-target <revision>`)**: 명시된 특정 태그(예: `go1.26.7`), 커밋 SHA, `master` 브랜치, 또는 로컬 `GOROOT`(`-target local`)와 비교합니다.
-   - **기준 리비전 갱신 (`-update`)**: 업스트림 변경 사항을 확인·반영한 뒤 설정 파일(`upstream.json`)을 타겟 리비전으로 갱신합니다.
+   - **기본 실행 (인자 없음)**: `go.mod`에 선언된 Go 버전을 기본 타겟으로 설정하고, 5중 일관성을 검증합니다.
+   - **최신 릴리즈 (`-target latest`)**: GitHub `golang/go`의 최신 정식 릴리즈 태그와 비교합니다.
+   - **로컬 툴체인 (`-target local`)**: 로컬 `$(go env GOROOT)/src/go/types`와 비교합니다.
+   - **특정 리비전 지정 (`-target <revision>`)**: 명시된 특정 태그, 커밋 SHA 또는 브랜치와 비교합니다.
+   - **스냅샷 동기화 (`-sync`)**: 원본 스냅샷 갱신, `upstream.json` 해시 갱신, 3-way 패치 적용 및 패치 파일 갱신을 일괄 수행합니다.
 3. **자동화 및 릴리즈 검증 스크립트 (`./scripts`)**:
-   - `./scripts/check-upstream.sh`: `./cmd/upstreamchecker`를 호출하는 검증 스크립트입니다.
-   - `./scripts/release.sh`: 릴리즈 태그 생성 전 워킹 트리 상태, `base_revision` 무결성, 최신 Go 정식 릴리즈와의 일치 여부, 전체 테스트 통과 여부를 강제 검증하는 릴리즈 게이트키퍼 스크립트입니다.
+   - `./scripts/check-upstream.sh`: 5중 일관성 및 패치 드리프트를 검증하는 스크립트입니다.
+   - `./scripts/apply-patches.sh`: 원본 스냅샷에 패치를 적용하여 `pkg/analyzer/*.go`를 재생성합니다.
+   - `./scripts/update-patches.sh`: `pkg/analyzer/*.go`의 로컬 수정사항으로부터 패치를 갱신합니다.
+   - `./scripts/sync-upstream.sh`: `./cmd/upstreamchecker -sync`를 통해 `go.mod` 버전에 맞추어 스냅샷과 패치를 동기화합니다.
+   - `./scripts/release.sh`: 릴리즈 태그 생성 전 워킹 트리 상태, 5중 일관성, 전체 테스트 통과 여부를 검증하는 릴리즈 게이트키퍼 스크립트입니다.
 
 ---
 
