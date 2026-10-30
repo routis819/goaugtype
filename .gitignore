@@ -14,3 +14,6 @@
 # Dependency directories (remove the comment below to include it)
 # vendor/
 pkg/analyzer/testdata/pkg/
+
+# Generated markdown preview files
+README*.html
