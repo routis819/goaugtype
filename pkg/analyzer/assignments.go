@@ -186,3 +186,123 @@ func returnVars(tinfo *types.Info, reg *Registry, sig *types.Signature, ret *ast
 
 	return nil
 }
+
+func checkAssign(tinfo *types.Info, col collected, reg *Registry) []augtError {
+	var errs []augtError
+	for _, a := range col.assignStmts {
+		errs = append(errs, assignVars(tinfo, reg, a)...)
+	}
+	for _, d := range col.declAssigns {
+		errs = append(errs, initVars(tinfo, reg, d)...)
+	}
+	return errs
+}
+
+func checkFuncBodyReturns(tinfo *types.Info, reg *Registry, sig *types.Signature, body *ast.BlockStmt) []augtError {
+	if sig == nil || body == nil || sig.Results().Len() == 0 {
+		return nil
+	}
+	var errs []augtError
+	ast.Inspect(body, func(n ast.Node) bool {
+		if n == nil {
+			return true
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		if ret, ok := n.(*ast.ReturnStmt); ok {
+			errs = append(errs, returnVars(tinfo, reg, sig, ret)...)
+		}
+		return true
+	})
+	return errs
+}
+
+func checkReturn(tinfo *types.Info, col collected, reg *Registry) []augtError {
+	var errs []augtError
+	for _, fd := range col.funcDecls {
+		if fd.Body == nil {
+			continue
+		}
+		obj := tinfo.ObjectOf(fd.Name)
+		if obj != nil {
+			if sig, ok := obj.Type().(*types.Signature); ok {
+				errs = append(errs, checkFuncBodyReturns(tinfo, reg, sig, fd.Body)...)
+			}
+		}
+	}
+	for _, fl := range col.funcLits {
+		if fl.Body == nil {
+			continue
+		}
+		tv, ok := tinfo.Types[fl]
+		if ok && tv.Type != nil {
+			if sig, ok := tv.Type.(*types.Signature); ok {
+				errs = append(errs, checkFuncBodyReturns(tinfo, reg, sig, fl.Body)...)
+			}
+		}
+	}
+	return errs
+}
+
+func checkCallArgs(tinfo *types.Info, col collected, reg *Registry) []augtError {
+	var errs []augtError
+	for _, call := range col.callExprs {
+		funTV, ok := tinfo.Types[call.Fun]
+		if !ok || funTV.IsType() || funTV.Type == nil {
+			continue
+		}
+		sig, ok := funTV.Type.Underlying().(*types.Signature)
+		if !ok || sig.Params().Len() == 0 {
+			continue
+		}
+
+		paramTypeAt := func(i int) types.Type {
+			numParams := sig.Params().Len()
+			if sig.Variadic() && i >= numParams-1 {
+				if slice, ok := sig.Params().At(numParams - 1).Type().(*types.Slice); ok {
+					if call.Ellipsis.IsValid() && i == len(call.Args)-1 {
+						return slice
+					}
+					return slice.Elem()
+				}
+			}
+			if i < numParams {
+				return sig.Params().At(i).Type()
+			}
+			return nil
+		}
+
+		if len(call.Args) == 1 && sig.Params().Len() > 1 {
+			if argTV, ok := tinfo.Types[call.Args[0]]; ok && argTV.Type != nil {
+				if tuple, ok := argTV.Type.(*types.Tuple); ok {
+					for i := 0; i < tuple.Len(); i++ {
+						pType := paramTypeAt(i)
+						if sumt := reg.Lookup(pType); sumt != nil {
+							if !sumt.IsPermittedType(reg, tuple.At(i).Type()) {
+								errs = append(errs, augtError{
+									err: errors.New("invalid argument: type is not permitted"),
+									pos: call.Args[0].Pos(),
+								})
+							}
+						}
+					}
+					continue
+				}
+			}
+		}
+
+		for i, argExpr := range call.Args {
+			pType := paramTypeAt(i)
+			if sumt := reg.Lookup(pType); sumt != nil {
+				if !sumt.IsPermittedValue(tinfo, reg, argExpr) {
+					errs = append(errs, augtError{
+						err: errors.New("invalid argument: type is not permitted"),
+						pos: argExpr.Pos(),
+					})
+				}
+			}
+		}
+	}
+	return errs
+}
