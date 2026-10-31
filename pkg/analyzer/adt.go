@@ -46,15 +46,11 @@ type SumTypeSet struct {
 	Name          *types.TypeName
 	SumType       types.Type       // Named interface type (e.g. Tree)
 	SelfIface     *types.Interface // Underlying interface of SumType
-	tset          _TypeSet         // Ported type set from typeset.go
+	tset          _TypeSet         // Normalized type set terms
 	RawTerms      []types.Type     // Direct evaluated union terms before flattening
 	ConcreteTerms []types.Type     // Flattened concrete (non-interface) types
 	IfaceTerms    []types.Type     // Flattened regular (non-sum) interface types
 	Pos           token.Pos        // Position of the directive comment
-}
-
-func (s *SumTypeSet) ValidateTerms() []augtError {
-	return nil
 }
 
 func (s *SumTypeSet) Includes(v types.Type) bool {
@@ -217,7 +213,7 @@ func (r *Registry) Lookup(t types.Type) *SumTypeSet {
 						Name:          obj,
 						SumType:       named,
 						SelfIface:     selfIface,
-						tset:          _TypeSet{selfIface: selfIface, terms: terms.norm()},
+						tset:          _TypeSet{terms: terms.norm()},
 						ConcreteTerms: concreteTerms,
 						IfaceTerms:    ifaceTerms,
 						Pos:           obj.Pos(),
@@ -268,8 +264,8 @@ func BuildRegistry(pass *analysis.Pass, rawDecls []goAugADTDecl) (*Registry, []a
 		var rawTerms []types.Type
 		hasErr := false
 		for _, prm := range decl.permitted {
-			if strings.HasPrefix(prm, "~") {
-				errs = append(errs, augtError{pos: decl.pos, err: fmt.Errorf("underlying type syntax %s is not permitted in sum types", prm)})
+			if err := parseTilde(prm); err != nil {
+				errs = append(errs, augtError{pos: decl.pos, err: err})
 				hasErr = true
 				continue
 			}
