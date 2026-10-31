@@ -271,17 +271,21 @@ sequenceDiagram
 
 ## 7. 업스트림(`go/types`) 스냅샷·패치 파이프라인 및 릴리즈 게이트키퍼
 
-포팅된 7개의 `go/types` 파일들을 투명하게 유지보수하기 위해, `goaugtype`은 [`internal/upstream/testdata/gotypes/`](../internal/upstream/testdata/gotypes)에 무수정 원본 스냅샷을 보관하고 [`internal/upstream/patches/`](../internal/upstream/patches)에 Unified Diff 패치 파일을 관리합니다. `go.mod`의 `go` 버전이 기준 버전의 단일 진실 공급원(Single Source of Truth)으로 동작하며, `cmd/upstreamchecker`, `scripts/*.sh`, `scripts/release.sh`는 **`go.mod` ↔ 코드 상수(`UpstreamBaseRevision`) ↔ `upstream.json` ↔ 로컬 원본 스냅샷 + 패치 적용 결과물 ↔ 업스트림 Go 릴리즈**의 5중 무결성을 강제합니다:
+`go/types` 기반 엔진을 투명하고 효율적으로 유지보수하기 위해, `goaugtype`은 [`internal/upstream/testdata/gotypes/`](../internal/upstream/testdata/gotypes)에 7개 참조 파일의 무수정 원본 스냅샷을 보관하되 역할에 따라 두 그룹으로 분리합니다:
+- **패치 후 사용 파일 (`typeterm.go`, `termlist.go`)**: [`internal/upstream/patches/`](../internal/upstream/patches)에 Unified Diff 패치 파일을 관리하며 `go generate ./...` 또는 `./scripts/apply-patches.sh`로 생성합니다.
+- **감시 전용 참조 파일 (`typeset.go`, `union.go`, `instantiate.go`, `operand.go`, `assignments.go`)**: 업스트림 변경 감지를 위해 스냅샷과 해시(`snapshot` + `sha256`)만 추적하며, `pkg/analyzer/` 내 동명 파일들은 `*types.Info`를 소비하는 `goaugtype` 고유 어댑터 소스로 직접 유지보수합니다.
 
-| 업스트림 `golang/go` 원본 | 로컬 무수정 스냅샷 | 패치 파일 | 포팅/생성된 `pkg/analyzer` 대상 | 주요 역할 |
+`go.mod`의 `go` 버전이 기준 버전의 단일 진실 공급원(Single Source of Truth)으로 동작하며, `cmd/upstreamchecker`, `scripts/*.sh`, `scripts/release.sh`는 **`go.mod` ↔ 코드 상수(`UpstreamBaseRevision`) ↔ `upstream.json` ↔ 로컬 원본 스냅샷 + 패치 적용 결과물 ↔ 업스트림 Go 릴리즈**의 5중 무결성을 강제합니다:
+
+| 업스트림 `golang/go` 원본 | 로컬 무수정 스냅샷 | 추적 모드 / 패치 파일 | `pkg/analyzer` 파일 | 주요 역할 |
 | :--- | :--- | :--- | :--- | :--- |
-| `src/go/types/typeterm.go` | [`gotypes/typeterm.go`](../internal/upstream/testdata/gotypes/typeterm.go) | [`typeterm.patch`](../internal/upstream/patches/typeterm.patch) | [`pkg/analyzer/typeterm.go`](../pkg/analyzer/typeterm.go) | 단일 타입 항 집합 연산 (`includes`, `subsetOf`, `disjoint`, `union`, `intersect`) 및 일반 인터페이스 항 지원 |
-| `src/go/types/termlist.go` | [`gotypes/termlist.go`](../internal/upstream/testdata/gotypes/termlist.go) | [`termlist.patch`](../internal/upstream/patches/termlist.patch) | [`pkg/analyzer/termlist.go`](../pkg/analyzer/termlist.go) | 정규화된 항 리스트 집합 대수 (`norm`, `includes`, `supersetOf`, `subsetOf`) |
-| `src/go/types/typeset.go` | [`gotypes/typeset.go`](../internal/upstream/testdata/gotypes/typeset.go) | [`typeset.patch`](../internal/upstream/patches/typeset.patch) | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `_TypeSet` 구조체, 메서드 셋 조회 및 `computeInterfaceTypeSet` |
-| `src/go/types/union.go` | [`gotypes/union.go`](../internal/upstream/testdata/gotypes/union.go) | [`union.patch`](../internal/upstream/patches/union.patch) | [`pkg/analyzer/union.go`](../pkg/analyzer/union.go) | 유니온 항 파싱(`parseTilde`), 쌍별 서로소 검사(`overlappingTerm`), 중첩 합타입 평탄화(`computeUnionTypeSet`) |
-| `src/go/types/instantiate.go` | [`gotypes/instantiate.go`](../internal/upstream/testdata/gotypes/instantiate.go) | [`instantiate.patch`](../internal/upstream/patches/instantiate.patch) | [`pkg/analyzer/instantiate.go`](../pkg/analyzer/instantiate.go) | `implements` 검증 (합타입 메서드 셋 구현 + `_TypeSet` 포함/부분집합 판정) |
-| `src/go/types/operand.go` | [`gotypes/operand.go`](../internal/upstream/testdata/gotypes/operand.go) | [`operand.patch`](../internal/upstream/patches/operand.patch) | [`pkg/analyzer/operand.go`](../pkg/analyzer/operand.go) | `operand` 표현 및 `Registry` 합타입 후킹이 적용된 `assignableTo` |
-| `src/go/types/assignments.go` | [`gotypes/assignments.go`](../internal/upstream/testdata/gotypes/assignments.go) | [`assignments.patch`](../internal/upstream/patches/assignments.patch) | [`pkg/analyzer/assignments.go`](../pkg/analyzer/assignments.go) | 1:1 및 다중 반환 튜플(`unpackRecv`) 대입 검증 (`initVars`, `assignVars`, `returnVars`) |
+| `src/go/types/typeterm.go` | [`gotypes/typeterm.go`](../internal/upstream/testdata/gotypes/typeterm.go) | **패치 적용** ([`typeterm.patch`](../internal/upstream/patches/typeterm.patch)) | [`pkg/analyzer/typeterm.go`](../pkg/analyzer/typeterm.go) | 단일 타입 항 집합 연산 (`includes`, `subsetOf`, `disjoint`, `union`, `intersect`) 및 일반 인터페이스 항 지원 |
+| `src/go/types/termlist.go` | [`gotypes/termlist.go`](../internal/upstream/testdata/gotypes/termlist.go) | **패치 적용** ([`termlist.patch`](../internal/upstream/patches/termlist.patch)) | [`pkg/analyzer/termlist.go`](../pkg/analyzer/termlist.go) | 정규화된 항 리스트 집합 대수 (`norm`, `includes`, `supersetOf`, `subsetOf`) |
+| `src/go/types/typeset.go` | [`gotypes/typeset.go`](../internal/upstream/testdata/gotypes/typeset.go) | **감시 전용** (snapshot-only) | [`pkg/analyzer/typeset.go`](../pkg/analyzer/typeset.go) | `_TypeSet` 구조체, 메서드 셋 조회 및 `computeInterfaceTypeSet` |
+| `src/go/types/union.go` | [`gotypes/union.go`](../internal/upstream/testdata/gotypes/union.go) | **감시 전용** (snapshot-only) | [`pkg/analyzer/union.go`](../pkg/analyzer/union.go) | 유니온 항 파싱(`parseTilde`), 쌍별 서로소 검사(`overlappingTerm`), 중첩 합타입 평탄화(`computeUnionTypeSet`) |
+| `src/go/types/instantiate.go` | [`gotypes/instantiate.go`](../internal/upstream/testdata/gotypes/instantiate.go) | **감시 전용** (snapshot-only) | [`pkg/analyzer/instantiate.go`](../pkg/analyzer/instantiate.go) | `implements` 검증 (합타입 메서드 셋 구현 + `_TypeSet` 포함/부분집합 판정) |
+| `src/go/types/operand.go` | [`gotypes/operand.go`](../internal/upstream/testdata/gotypes/operand.go) | **감시 전용** (snapshot-only) | [`pkg/analyzer/operand.go`](../pkg/analyzer/operand.go) | `operand` 표현 및 `Registry` 합타입 후킹이 적용된 `assignableTo` |
+| `src/go/types/assignments.go` | [`gotypes/assignments.go`](../internal/upstream/testdata/gotypes/assignments.go) | **감시 전용** (snapshot-only) | [`pkg/analyzer/assignments.go`](../pkg/analyzer/assignments.go) | 1:1 및 다중 반환 튜플(`unpackRecv`) 대입 검증 (`initVars`, `assignVars`, `returnVars`) |
 
 ```mermaid
 flowchart LR
