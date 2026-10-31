@@ -12,13 +12,13 @@ import (
 )
 
 // parseTilde validates that ~T syntax is not used in sum types.
-// Ported from src/go/types/union.go (lines 139–165).
+// Modeled after parseTilde in src/go/types/union.go (lines 139–165).
 // [goaugtype] As specified in #57644, underlying type syntax ~T is not permitted in sum types.
-func parseTilde(pos token.Pos, termStr string) (string, error) {
+func parseTilde(termStr string) error {
 	if strings.HasPrefix(termStr, "~") {
-		return "", fmt.Errorf("underlying type syntax %s is not permitted in sum types", termStr)
+		return fmt.Errorf("underlying type syntax %s is not permitted in sum types", termStr)
 	}
-	return termStr, nil
+	return nil
 }
 
 // overlappingTerm reports the index of the term x in terms which is
@@ -131,8 +131,7 @@ func computeUnionTypeSet(reg *Registry, pos token.Pos, sumType types.Type, selfI
 	}
 
 	tset := &_TypeSet{
-		selfIface: selfIface,
-		terms:     termlist(leafTerms).norm(),
+		terms: termlist(leafTerms).norm(),
 	}
 
 	return tset, errs
