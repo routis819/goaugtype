@@ -34,12 +34,14 @@ goaugtype/
 │       ├── check.go            # AST collector, 8-path assignability, type switch checks
 │       ├── doc.go              # Package analyzer documentation
 │       ├── analyzer_test.go    # analysistest test runner
-│       ├── testdata/           # Static test cases (simple, imported, typeset)
-│       └── [7 ported files]   # Ported from src/go/types (see mapping table below)
+│       ├── testdata/           # Static test cases (simple, imported, typeset, etc.)
+│       ├── typeterm.go         # Generated from gotypes/typeterm.go + typeterm.patch
+│       ├── termlist.go         # Generated from gotypes/termlist.go + termlist.patch
+│       └── {typeset,union,instantiate,operand,assignments}.go # Native adapters modeled on go/types
 ├── internal/
 │   └── upstream/
-│       ├── testdata/gotypes/   # 100% byte-for-byte unmodified snapshots of src/go/types
-│       └── patches/            # Unified diff (.patch) files for each ported file
+│       ├── testdata/gotypes/   # 100% byte-for-byte unmodified snapshots of 7 src/go/types files
+│       └── patches/            # Unified diff (.patch) files for patched files (typeterm, termlist)
 ├── scripts/
 │   ├── check-upstream.sh       # 5-way consistency and patch drift verification
 │   ├── apply-patches.sh        # Regenerates pkg/analyzer/*.go from snapshots + patches
@@ -58,17 +60,19 @@ goaugtype/
 
 ## 1:1 Upstream Mapping Table
 
-`goaugtype` directly ports 7 files from the Go compiler's type checker (`src/go/types/`). Each file has an exact 1:1 relationship between the pristine upstream snapshot, its unified patch, and the generated target in `pkg/analyzer/`:
+`goaugtype` tracks 7 files from the Go compiler's type checker (`src/go/types/`) in two categories:
+1. **Patched Files (`typeterm.go`, `termlist.go`)**: Directly ported from `src/go/types/` with minimal diffs via unified patches (`internal/upstream/patches/*.patch`) and regenerated via `go generate ./...` or `./scripts/apply-patches.sh`.
+2. **Monitored Reference Files (`typeset.go`, `union.go`, `instantiate.go`, `operand.go`, `assignments.go`)**: Stored as unmodified snapshots (`snapshot` + `sha256` in `upstream.json`) to detect upstream semantic changes, while their `pkg/analyzer/` counterparts are maintained directly as native `goaugtype` source files operating on `*types.Info`.
 
-| Upstream `src/go/types/` File | Pristine Snapshot (`internal/upstream/testdata/gotypes/`) | Unified Patch (`internal/upstream/patches/`) | Generated File (`pkg/analyzer/`) | Ported Symbols & `[goaugtype]` Roles |
+| Upstream `src/go/types/` File | Pristine Snapshot (`internal/upstream/testdata/gotypes/`) | Tracking Mode / Unified Patch | Analyzer File (`pkg/analyzer/`) | Ported Symbols & `[goaugtype]` Roles |
 | :--- | :--- | :--- | :--- | :--- |
-| `typeterm.go` | [`gotypes/typeterm.go`](./internal/upstream/testdata/gotypes/typeterm.go) | [`typeterm.patch`](./internal/upstream/patches/typeterm.patch) | [`typeterm.go`](./pkg/analyzer/typeterm.go) | `term`, `equal`, `union`, `intersect`, `includes`, `subsetOf`, `disjoint` — supports non-empty interface terms (`#5`). |
-| `termlist.go` | [`gotypes/termlist.go`](./internal/upstream/testdata/gotypes/termlist.go) | [`termlist.patch`](./internal/upstream/patches/termlist.patch) | [`termlist.go`](./pkg/analyzer/termlist.go) | `termlist`, `allTermlist`, `norm`, `union`, `intersect`, `equal`, `includes`, `supersetOf`, `subsetOf` — 100% parity. |
-| `typeset.go` | [`gotypes/typeset.go`](./internal/upstream/testdata/gotypes/typeset.go) | [`typeset.patch`](./internal/upstream/patches/typeset.patch) | [`typeset.go`](./pkg/analyzer/typeset.go) | `_TypeSet`, `IsEmpty`, `IsAll`, `IsMethodSet`, `NumMethods`, `Method`, `LookupMethod`, `hasTerms`, `subsetOf`, `computeInterfaceTypeSet`. |
-| `union.go` | [`gotypes/union.go`](./internal/upstream/testdata/gotypes/union.go) | [`union.patch`](./internal/upstream/patches/union.patch) | [`union.go`](./pkg/analyzer/union.go) | `parseTilde` (rejects `~T` & `nil`), `overlappingTerm` (disjointness validation), `computeUnionTypeSet` (nested sum type flattening). |
-| `instantiate.go` | [`gotypes/instantiate.go`](./internal/upstream/testdata/gotypes/instantiate.go) | [`instantiate.patch`](./internal/upstream/patches/instantiate.patch) | [`instantiate.go`](./pkg/analyzer/instantiate.go) | `(reg *Registry) implements` — verifies method set contracts (`#9`) and term set inclusion/subset. |
-| `operand.go` | [`gotypes/operand.go`](./internal/upstream/testdata/gotypes/operand.go) | [`operand.patch`](./internal/upstream/patches/operand.patch) | [`pkg/analyzer/operand.go`](./pkg/analyzer/operand.go) | `operandMode`, `operand`, `newOperand`, `(*operand).assignableTo` — hooks `Registry.Lookup` for sum type assignability. |
-| `assignments.go` | [`gotypes/assignments.go`](./internal/upstream/testdata/gotypes/assignments.go) | [`assignments.patch`](./internal/upstream/patches/assignments.patch) | [`assignments.go`](./pkg/analyzer/assignments.go) | `assignment`, `initVar`, `assignVar`, `unpackRecv`, `initVars`, `assignVars`, `returnVars` — handles 1:1 and tuple assignments. |
+| `typeterm.go` | [`gotypes/typeterm.go`](./internal/upstream/testdata/gotypes/typeterm.go) | **Patched** ([`typeterm.patch`](./internal/upstream/patches/typeterm.patch)) | [`typeterm.go`](./pkg/analyzer/typeterm.go) | `term`, `equal`, `union`, `intersect`, `includes`, `subsetOf`, `disjoint` — supports non-empty interface terms (`#5`). |
+| `termlist.go` | [`gotypes/termlist.go`](./internal/upstream/testdata/gotypes/termlist.go) | **Patched** ([`termlist.patch`](./internal/upstream/patches/termlist.patch)) | [`termlist.go`](./pkg/analyzer/termlist.go) | `termlist`, `allTermlist`, `norm`, `union`, `intersect`, `equal`, `includes`, `supersetOf`, `subsetOf` — 100% parity. |
+| `typeset.go` | [`gotypes/typeset.go`](./internal/upstream/testdata/gotypes/typeset.go) | **Monitored** (snapshot-only) | [`typeset.go`](./pkg/analyzer/typeset.go) | `_TypeSet`, `IsEmpty`, `IsAll`, `IsMethodSet`, `NumMethods`, `hasTerms`, `subsetOf`, `computeInterfaceTypeSet`. |
+| `union.go` | [`gotypes/union.go`](./internal/upstream/testdata/gotypes/union.go) | **Monitored** (snapshot-only) | [`union.go`](./pkg/analyzer/union.go) | `parseTilde` (rejects `~T` & `nil`), `overlappingTerm` (disjointness validation), `computeUnionTypeSet` (nested sum type flattening). |
+| `instantiate.go` | [`gotypes/instantiate.go`](./internal/upstream/testdata/gotypes/instantiate.go) | **Monitored** (snapshot-only) | [`instantiate.go`](./pkg/analyzer/instantiate.go) | `(reg *Registry) implements` — verifies method set contracts (`#9`) and term set inclusion/subset. |
+| `operand.go` | [`gotypes/operand.go`](./internal/upstream/testdata/gotypes/operand.go) | **Monitored** (snapshot-only) | [`pkg/analyzer/operand.go`](./pkg/analyzer/operand.go) | `operandMode`, `operand`, `newOperand`, `(*operand).assignableTo` — hooks `Registry.Lookup` for sum type assignability. |
+| `assignments.go` | [`gotypes/assignments.go`](./internal/upstream/testdata/gotypes/assignments.go) | **Monitored** (snapshot-only) | [`assignments.go`](./pkg/analyzer/assignments.go) | `assignment`, `initVar`, `assignVar`, `unpackRecv`, `initVars`, `assignVars`, `returnVars` — handles 1:1 and tuple assignments. |
 
 ---
 
@@ -87,9 +91,9 @@ To run individual test packages:
 go test -v ./pkg/analyzer
 ```
 
-### 2. Regenerating Ported Files from Pristine Snapshots
+### 2. Regenerating Patched Files from Pristine Snapshots
 
-To cleanly restore and apply patches to all 7 files in `pkg/analyzer/`:
+To cleanly restore and apply patches to the patched files (`typeterm.go`, `termlist.go`) in `pkg/analyzer/`:
 
 ```bash
 # Using go generate:
@@ -99,9 +103,9 @@ go generate ./...
 ./scripts/apply-patches.sh
 ```
 
-### 3. Modifying Ported `go/types` Files & Updating Patches
+### 3. Modifying Patched `go/types` Files & Updating Patches
 
-When adding features or fixing bugs in any of the 7 ported files:
+When modifying the patched files (`pkg/analyzer/typeterm.go` or `pkg/analyzer/termlist.go`):
 
 1. **Edit the target file** in `pkg/analyzer/<file>.go`.
 2. **Mark your modifications** clearly with comment headers:
@@ -177,7 +181,7 @@ git push origin v0.3.0
 2. **Maintain Minimal Diff**: When modifying ported files, keep diffs against upstream minimal. Mark all custom code with `// [goaugtype]`.
 3. **Preserve Disjoint Union Invariant**: Every sum type must strictly enforce pairwise disjointness across all flattened terms. Never allow `any` or subtype collisions ($C \subset I$, $I_1 \subseteq I_2$) in sum types.
 4. **Verify with `gopls`**: Ensure zero diagnostics across all packages prior to submitting pull requests.
-5. **Always Update Patches**: Never commit modifications to `pkg/analyzer/{typeterm,termlist,typeset,union,instantiate,operand,assignments}.go` without running `./scripts/update-patches.sh` and committing the resulting `internal/upstream/patches/*.patch` files.
+5. **Always Update Patches**: Never commit modifications to `pkg/analyzer/{typeterm,termlist}.go` without running `./scripts/update-patches.sh` and committing the resulting `internal/upstream/patches/*.patch` files.
 
 ---
 

@@ -34,12 +34,14 @@ goaugtype/
 │       ├── check.go            # AST 수집기, 8대 대입 경로 검증, type switch 검증
 │       ├── doc.go              # analyzer 패키지 문서
 │       ├── analyzer_test.go    # analysistest 테스트 러너
-│       ├── testdata/           # 정적 테스트 케이스 (simple, imported, typeset)
-│       └── [7개 포팅 파일]     # src/go/types에서 1:1 포팅 (아래 매핑 테이블 참조)
+│       ├── testdata/           # 정적 테스트 케이스 (simple, imported, typeset 등)
+│       ├── typeterm.go         # gotypes/typeterm.go + typeterm.patch로 생성되는 패치 파일
+│       ├── termlist.go         # gotypes/termlist.go + termlist.patch로 생성되는 패치 파일
+│       └── {typeset,union,instantiate,operand,assignments}.go # go/types 모델 기반 자체 어댑터 파일
 ├── internal/
 │   └── upstream/
-│       ├── testdata/gotypes/   # src/go/types 원본 100% 무수정 스냅샷 (바이트 단위 일치)
-│       └── patches/            # 각 포팅 파일에 대한 Unified Diff (.patch) 파일
+│       ├── testdata/gotypes/   # src/go/types 원본 7개 파일의 100% 무수정 스냅샷 (바이트 단위 일치)
+│       └── patches/            # 패치 대상 파일(typeterm, termlist)에 대한 Unified Diff (.patch) 파일
 ├── scripts/
 │   ├── check-upstream.sh       # 5중 무결성 및 패치 드리프트 검증 스크립트
 │   ├── apply-patches.sh        # 원본 스냅샷 + 패치로부터 pkg/analyzer/*.go 재생성
@@ -58,17 +60,19 @@ goaugtype/
 
 ## 1:1 업스트림 매핑 테이블
 
-`goaugtype`은 Go 컴파일러 타입 체커(`src/go/types/`)의 핵심 파일 7개를 1:1로 직접 포팅하여 사용합니다. 각 파일은 무수정 원본 스냅샷, Unified Diff 패치, 그리고 `pkg/analyzer/` 내 생성 파일과 정확히 1:1로 대응됩니다:
+`goaugtype`은 Go 컴파일러 타입 체커(`src/go/types/`)의 핵심 파일 7개를 두 가지 범주로 나누어 관리합니다:
+1. **패치 후 사용 파일 (`typeterm.go`, `termlist.go`)**: 원본 알고리즘을 그대로 유지한 채 최소 변경 패치(`internal/upstream/patches/*.patch`)를 적용하여 `go generate ./...` 또는 `./scripts/apply-patches.sh`로 생성합니다.
+2. **감시 전용 참조 파일 (`typeset.go`, `union.go`, `instantiate.go`, `operand.go`, `assignments.go`)**: 업스트림 스펙/구현 변경을 감지하기 위해 무수정 원본 스냅샷(`snapshot` + `sha256`)만 추적하며, `pkg/analyzer/` 내 대응 파일들은 `*types.Info` 위에서 동작하는 `goaugtype` 고유 소스 코드로 직접 관리합니다.
 
-| 업스트림 `src/go/types/` 파일 | 무수정 원본 스냅샷 (`internal/upstream/testdata/gotypes/`) | Unified Diff 패치 (`internal/upstream/patches/`) | 생성 대상 파일 (`pkg/analyzer/`) | 포팅된 주요 심볼 및 `[goaugtype]` 확장 역할 |
+| 업스트림 `src/go/types/` 파일 | 무수정 원본 스냅샷 (`internal/upstream/testdata/gotypes/`) | 추적 모드 / Unified Diff 패치 | 분석기 파일 (`pkg/analyzer/`) | 주요 심볼 및 `[goaugtype]` 역할 |
 | :--- | :--- | :--- | :--- | :--- |
-| `typeterm.go` | [`gotypes/typeterm.go`](./internal/upstream/testdata/gotypes/typeterm.go) | [`typeterm.patch`](./internal/upstream/patches/typeterm.patch) | [`typeterm.go`](./pkg/analyzer/typeterm.go) | `term`, `equal`, `union`, `intersect`, `includes`, `subsetOf`, `disjoint` — 비어 있지 않은 일반 인터페이스 항 지원 (`#5`). |
-| `termlist.go` | [`gotypes/termlist.go`](./internal/upstream/testdata/gotypes/termlist.go) | [`termlist.patch`](./internal/upstream/patches/termlist.patch) | [`termlist.go`](./pkg/analyzer/termlist.go) | `termlist`, `allTermlist`, `norm`, `union`, `intersect`, `equal`, `includes`, `supersetOf`, `subsetOf` — 원본 알고리즘 100% 보존. |
-| `typeset.go` | [`gotypes/typeset.go`](./internal/upstream/testdata/gotypes/typeset.go) | [`typeset.patch`](./internal/upstream/patches/typeset.patch) | [`typeset.go`](./pkg/analyzer/typeset.go) | `_TypeSet`, `IsEmpty`, `IsAll`, `IsMethodSet`, `NumMethods`, `Method`, `LookupMethod`, `hasTerms`, `subsetOf`, `computeInterfaceTypeSet`. |
-| `union.go` | [`gotypes/union.go`](./internal/upstream/testdata/gotypes/union.go) | [`union.patch`](./internal/upstream/patches/union.patch) | [`pkg/analyzer/union.go`](./pkg/analyzer/union.go) | `parseTilde`(`~T` 및 `nil` 금지), `overlappingTerm`(서로소 검증), `computeUnionTypeSet`(중첩 합타입 재귀 평탄화). |
-| `instantiate.go` | [`gotypes/instantiate.go`](./internal/upstream/testdata/gotypes/instantiate.go) | [`instantiate.patch`](./internal/upstream/patches/instantiate.patch) | [`pkg/analyzer/instantiate.go`](./pkg/analyzer/instantiate.go) | `(reg *Registry) implements` — 메서드 규약 검증(`#9`) 및 타입 셋 포함/부분집합 판정. |
-| `operand.go` | [`gotypes/operand.go`](./internal/upstream/testdata/gotypes/operand.go) | [`operand.patch`](./internal/upstream/patches/operand.patch) | [`pkg/analyzer/operand.go`](./pkg/analyzer/operand.go) | `operandMode`, `operand`, `newOperand`, `(*operand).assignableTo` — `Registry.Lookup`을 후킹하여 합타입 대입 가능성 검증. |
-| `assignments.go` | [`gotypes/assignments.go`](./internal/upstream/testdata/gotypes/assignments.go) | [`assignments.patch`](./internal/upstream/patches/assignments.patch) | [`assignments.go`](./pkg/analyzer/assignments.go) | `assignment`, `initVar`, `assignVar`, `unpackRecv`, `initVars`, `assignVars`, `returnVars` — 1:1 및 튜플 분해 대입 검증. |
+| `typeterm.go` | [`gotypes/typeterm.go`](./internal/upstream/testdata/gotypes/typeterm.go) | **패치 적용** ([`typeterm.patch`](./internal/upstream/patches/typeterm.patch)) | [`typeterm.go`](./pkg/analyzer/typeterm.go) | `term`, `equal`, `union`, `intersect`, `includes`, `subsetOf`, `disjoint` — 비어 있지 않은 일반 인터페이스 항 지원 (`#5`). |
+| `termlist.go` | [`gotypes/termlist.go`](./internal/upstream/testdata/gotypes/termlist.go) | **패치 적용** ([`termlist.patch`](./internal/upstream/patches/termlist.patch)) | [`termlist.go`](./pkg/analyzer/termlist.go) | `termlist`, `allTermlist`, `norm`, `union`, `intersect`, `equal`, `includes`, `supersetOf`, `subsetOf` — 원본 알고리즘 100% 보존. |
+| `typeset.go` | [`gotypes/typeset.go`](./internal/upstream/testdata/gotypes/typeset.go) | **감시 전용** (snapshot-only) | [`typeset.go`](./pkg/analyzer/typeset.go) | `_TypeSet`, `IsEmpty`, `IsAll`, `IsMethodSet`, `NumMethods`, `hasTerms`, `subsetOf`, `computeInterfaceTypeSet`. |
+| `union.go` | [`gotypes/union.go`](./internal/upstream/testdata/gotypes/union.go) | **감시 전용** (snapshot-only) | [`pkg/analyzer/union.go`](./pkg/analyzer/union.go) | `parseTilde`(`~T` 및 `nil` 금지), `overlappingTerm`(서로소 검증), `computeUnionTypeSet`(중첩 합타입 재귀 평탄화). |
+| `instantiate.go` | [`gotypes/instantiate.go`](./internal/upstream/testdata/gotypes/instantiate.go) | **감시 전용** (snapshot-only) | [`pkg/analyzer/instantiate.go`](./pkg/analyzer/instantiate.go) | `(reg *Registry) implements` — 메서드 규약 검증(`#9`) 및 타입 셋 포함/부분집합 판정. |
+| `operand.go` | [`gotypes/operand.go`](./internal/upstream/testdata/gotypes/operand.go) | **감시 전용** (snapshot-only) | [`pkg/analyzer/operand.go`](./pkg/analyzer/operand.go) | `operandMode`, `operand`, `newOperand`, `(*operand).assignableTo` — `Registry.Lookup`을 후킹하여 합타입 대입 가능성 검증. |
+| `assignments.go` | [`gotypes/assignments.go`](./internal/upstream/testdata/gotypes/assignments.go) | **감시 전용** (snapshot-only) | [`assignments.go`](./pkg/analyzer/assignments.go) | `assignment`, `initVar`, `assignVar`, `unpackRecv`, `initVars`, `assignVars`, `returnVars` — 1:1 및 튜플 분해 대입 검증. |
 
 ---
 
@@ -88,9 +92,9 @@ go test -v ./...
 go test -v ./pkg/analyzer
 ```
 
-### 2. 무수정 원본 스냅샷으로부터 포팅 파일 재생성
+### 2. 무수정 원본 스냅샷으로부터 패치 파일 재생성
 
-`pkg/analyzer/` 내 7개 포팅 파일 전체를 원본 스냅샷과 패치로부터 깨끗하게 재생성합니다:
+`pkg/analyzer/` 내 패치 대상 파일(`typeterm.go`, `termlist.go`)을 원본 스냅샷과 패치로부터 깨끗하게 재생성합니다:
 
 ```bash
 # go generate 명령어 사용:
@@ -100,9 +104,9 @@ go generate ./...
 ./scripts/apply-patches.sh
 ```
 
-### 3. 포팅된 `go/types` 파일 수정 및 패치 갱신
+### 3. 패치 적용 파일(`typeterm.go`, `termlist.go`) 수정 및 패치 갱신
 
-포팅된 7개 파일의 로직을 수정하거나 버그를 해결할 때의 절차입니다:
+패치로 관리되는 파일(`typeterm.go`, `termlist.go`)의 로직을 수정하거나 버그를 해결할 때의 절차입니다:
 
 1. **대상 파일을 직접 수정**합니다 (`pkg/analyzer/<file>.go`).
 2. 변경된 코드 영역을 명확한 주석 헤더로 표기합니다:
@@ -182,7 +186,7 @@ git push origin v0.3.0
 2. **최소 변경 원칙(Minimal Diff)**: 원본 `go/types` 대비 차이점을 최소화하고, 모든 커스텀 수정 영역은 `// [goaugtype]`으로 명시하십시오.
 3. **쌍별 서로소 불변식 엄수**: 모든 합타입은 평탄화된 항들 사이의 쌍별 서로소를 반드시 보장해야 합니다. `any`나 서브타입 충돌($C \subset I$, $I_1 \subseteq I_2$)을 절대 허용하지 마십시오.
 4. **`gopls` 진단 제로 유지**: 풀 리퀘스트를 제출하기 전 모든 패키지에서 에러 및 경고 진단이 0개인지 확인하십시오.
-5. **패치 동기화 필수**: `pkg/analyzer/{typeterm,termlist,typeset,union,instantiate,operand,assignments}.go`를 수정한 경우, 반드시 `./scripts/update-patches.sh`를 실행하여 `internal/upstream/patches/*.patch` 파일도 함께 커밋해야 합니다.
+5. **패치 동기화 필수**: `pkg/analyzer/{typeterm,termlist}.go`를 수정한 경우, 반드시 `./scripts/update-patches.sh`를 실행하여 `internal/upstream/patches/*.patch` 파일도 함께 커밋해야 합니다.
 
 ---
 
