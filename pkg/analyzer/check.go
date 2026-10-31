@@ -69,86 +69,56 @@ SEARCHING:
 		return nil, token.NoPos, nil
 	}
 	if strings.TrimSpace(adtDeclLine) == "" {
-		return nil, pos, fmt.Errorf("invalid format, pos :%v", pos)
+		return nil, pos, errors.New("invalid goaugtype directive: empty type list")
 	}
 	items := strings.Split(adtDeclLine, "|")
 	for i := range items {
 		items[i] = strings.TrimSpace(items[i])
 		if items[i] == "" {
-			return nil, pos, fmt.Errorf("invalid format, pos :%v", pos)
+			return nil, pos, errors.New("invalid goaugtype directive: empty union term")
 		}
 	}
 
 	return items, pos, nil
 }
 
-func analysisTypeSpecWithCmt(cmtmap ast.CommentMap, tspc *ast.TypeSpec) ([]goAugADTDecl, error) {
+func analysisTypeSpecWithCmt(cmtmap ast.CommentMap, tspc *ast.TypeSpec) ([]goAugADTDecl, token.Pos, error) {
 	cmt, ok := cmtmap[tspc]
 	if !ok {
-		return nil, nil
+		return nil, token.NoPos, nil
 	}
 	permitted, pos, err := parseAdtDeclCmt(cmt)
 	if err != nil {
-		return nil, err
+		return nil, pos, err
 	}
-	if permitted == nil {
-		return nil, nil
-	}
-	sumtype, err := analysisTypeSpec(tspc)
-	if err != nil {
-		return nil, err
+	if permitted == nil || tspc.Name == nil {
+		return nil, token.NoPos, nil
 	}
 
-	// Store the position to use for evaluation later
-	return []goAugADTDecl{{sumtype: sumtype, permitted: permitted, pos: pos}}, nil
+	return []goAugADTDecl{{sumtype: tspc.Name.Name, permitted: permitted, pos: pos}}, pos, nil
 }
 
-func analysisTypeSpec(tspc *ast.TypeSpec) (string, error) {
-	switch v := tspc.Type.(type) {
-	case *ast.Ident:
-		if v.Name != "any" {
-			return "", fmt.Errorf("goaugtype variable should be any or interface{}, pos - %v", tspc.Pos())
-		}
-
-		return tspc.Name.Name, nil
-	case *ast.InterfaceType:
-		return tspc.Name.Name, nil
-	default:
-		return "", nil
-	}
-}
-
-func analysisTypeDeclSpecs(decl *ast.GenDecl) (string, error) {
-	if len(decl.Specs) != 1 {
-		// golang allows to declare multiple types in a single
-		// parenthesis. In that case, the comment does not
-		// belong to ast.GenDecl node but ast.TypeSpec node.
-		return "", fmt.Errorf("invalid format - pos:%v", decl.Pos())
-	}
-	spc := decl.Specs[0]
-	tspc := spc.(*ast.TypeSpec)
-
-	return analysisTypeSpec(tspc)
-}
-
-func analysisTypeDeclWithCmt(cmtmap ast.CommentMap, v *ast.GenDecl) ([]goAugADTDecl, error) {
+func analysisTypeDeclWithCmt(cmtmap ast.CommentMap, v *ast.GenDecl) ([]goAugADTDecl, token.Pos, error) {
 	cmt, ok := cmtmap[v]
 	if !ok {
-		return nil, nil
+		return nil, token.NoPos, nil
 	}
 	permitted, pos, err := parseAdtDeclCmt(cmt)
 	if err != nil {
-		return nil, err
+		return nil, pos, err
 	}
 	if permitted == nil {
-		return nil, nil
+		return nil, token.NoPos, nil
 	}
-	sumtype, err := analysisTypeDeclSpecs(v)
-	if err != nil {
-		return nil, err
+	if len(v.Specs) != 1 {
+		return nil, pos, errors.New("invalid goaugtype directive on grouped type declaration: attach directive to individual type spec")
+	}
+	tspc, ok := v.Specs[0].(*ast.TypeSpec)
+	if !ok || tspc.Name == nil {
+		return nil, token.NoPos, nil
 	}
 
-	return []goAugADTDecl{{sumtype: sumtype, permitted: permitted, pos: pos}}, nil
+	return []goAugADTDecl{{sumtype: tspc.Name.Name, permitted: permitted, pos: pos}}, pos, nil
 }
 
 type source struct {
@@ -196,10 +166,12 @@ func (ispt *inspector) inspect(n ast.Node) bool {
 	case *ast.GenDecl:
 		switch v.Tok {
 		case token.TYPE:
-			d, err := analysisTypeDeclWithCmt(ispt.src.cmtmap, v)
+			d, pos, err := analysisTypeDeclWithCmt(ispt.src.cmtmap, v)
 			if err != nil {
-				ispt.col.errs = append(ispt.col.errs, augtError{err: err, pos: v.Pos()})
-
+				if !pos.IsValid() {
+					pos = v.Pos()
+				}
+				ispt.col.errs = append(ispt.col.errs, augtError{err: err, pos: pos})
 				break
 			}
 			ispt.col.adtDecls = append(ispt.col.adtDecls, d...)
@@ -211,10 +183,12 @@ func (ispt *inspector) inspect(n ast.Node) bool {
 			}
 		}
 	case *ast.TypeSpec:
-		d, err := analysisTypeSpecWithCmt(ispt.src.cmtmap, v)
+		d, pos, err := analysisTypeSpecWithCmt(ispt.src.cmtmap, v)
 		if err != nil {
-			ispt.col.errs = append(ispt.col.errs, augtError{err: err, pos: v.Pos()})
-
+			if !pos.IsValid() {
+				pos = v.Pos()
+			}
+			ispt.col.errs = append(ispt.col.errs, augtError{err: err, pos: pos})
 			break
 		}
 		ispt.col.adtDecls = append(ispt.col.adtDecls, d...)

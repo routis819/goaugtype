@@ -45,6 +45,9 @@ type BadOverlapConcrete any
 // goaugtype: io.ReadWriter | io.Reader // want "overlapping interface terms io.ReadWriter and io.Reader in sum type typeset.BadOverlapIfaces"
 type BadOverlapIfaces any
 
+// goaugtype: *Leaf | *Node // want "BadNonInterface is not an interface"
+type BadNonInterface struct{}
+
 var _ io.Reader
 
 func testNodeWalker() {
