@@ -22,36 +22,26 @@
     {
       "upstream": "src/go/types/typeset.go",
       "snapshot": "typeset.go",
-      "patch": "typeset.patch",
-      "target": "typeset.go",
       "sha256": "d506dd9257a59375455bd58968309bbfa933844b0d64587d0debfd52066da46f"
     },
     {
       "upstream": "src/go/types/union.go",
       "snapshot": "union.go",
-      "patch": "union.patch",
-      "target": "union.go",
       "sha256": "2ab438af5ee222c688c71010c55ba4319d4b2d6d0cd824a8f66c404b5ee3e019"
     },
     {
       "upstream": "src/go/types/instantiate.go",
       "snapshot": "instantiate.go",
-      "patch": "instantiate.patch",
-      "target": "instantiate.go",
       "sha256": "b9f0eab8b51d7560107d9cada8dba7e1e7d4bdb02bd10df392910d1b92905ae4"
     },
     {
       "upstream": "src/go/types/operand.go",
       "snapshot": "operand.go",
-      "patch": "operand.patch",
-      "target": "operand.go",
       "sha256": "fb6fe7d977060e4da9b4768235ab625e46508c8c21f60b1d0d6008409df23412"
     },
     {
       "upstream": "src/go/types/assignments.go",
       "snapshot": "assignments.go",
-      "patch": "assignments.patch",
-      "target": "assignments.go",
       "sha256": "feb474528aa97bb7267e7719543b4ccfe3a77091eba968e5b7c1bf9c48d18c5c"
     }
   ]
