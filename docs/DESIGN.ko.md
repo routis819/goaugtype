@@ -2,7 +2,7 @@
 
 ## 1. 배경 및 목표 (Background & Vision)
 
-`goaugtype`(`goaugadt`)은 Go 언어에서 정적 분석(`golang.org/x/tools/go/analysis`)을 통해 **합타입(Sum Types / Algebraic Data Types)**을 지원하는 린터(Linter)입니다.
+`goaugtype`은 Go 언어에서 정적 분석(`golang.org/x/tools/go/analysis`)을 통해 **합타입(Sum Types / Algebraic Data Types)**을 지원하는 린터(Linter)입니다.
 
 본 설계 문서는 초기 프로토타입에서 발견된 스펙상의 모호함과 타입 안전성 구멍(Soundness Holes)을 해결하기 위해, Go 코어 팀의 Ian Lance Taylor가 제안한 **[golang/go#57644 (`proposal: spec: sum types based on general interfaces`)](https://github.com/golang/go/issues/57644)의 순수 모델(Pure Model)**을 프로젝트의 이론적·명세적 기준으로 삼아 `goaugtype`의 스펙과 아키텍처를 재정립합니다.
 
@@ -10,7 +10,7 @@
 1. **`golang/go#57644`의 순수 선행 구현(Pure Pre-implementation)**:
    - `#57644`는 현재 제네릭 타입 제약(Type parameter constraint)에만 허용되는 타입 유니온(`T1 | T2`)을 **일반 인터페이스(Ordinary/General Interface)**에도 허용하자는 제안입니다.
    - 현행 Go 컴파일러는 변수 타입으로 사용되는 일반 인터페이스 내에 `T1 | T2`를 직접 작성하면 컴파일 에러(`interface contains type constraints`)를 발생시킵니다.
-   - 따라서 `goaugtype`은 표준 Go 문법과 호환되는 인터페이스 선언(`type I any` 또는 `type I interface { ... }`) 위에 `// goaugtype: T1 | T2` 주석 지시자를 부여하여, **`#57644`의 타입 셋(Type Set) 규칙을 있는 그대로 정적 분석기로 에뮬레이션**합니다.
+   - 따라서 `goaugtype`은 표준 Go 문법과 호환되는 인터페이스 선언(`type I any` 또는 `type I interface { ... }`) 위에 `//goaugtype:sum T1 | T2` 주석 지시자를 부여하여, **`#57644`의 타입 셋(Type Set) 규칙을 있는 그대로 정적 분석기로 에뮬레이션**합니다.
 2. **타입 셋(Type Set) 기반의 일관된 시맨틱 및 서로소 직교성(Disjoint Orthogonality)**:
    - 합타입을 별도의 특수한 문법 체계나 커스텀 `nil` 어노테이션으로 정의하지 않고, Go 1.18+ 스펙의 **인터페이스 타입 셋(Type Set)과 구현(Implements / Assignability) 규칙**의 자연스러운 확장으로 정의합니다.
    - 여기에 더해 평탄화(Flattening)된 유니온 항들 간의 **선언부 서로소(Pairwise Disjointness)**를 강제함으로써, 합타입에 새로운 타입을 추가했을 때 상위 인터페이스에 흡수되어 기존 `type switch` 문이 조용히 통과해 버리는 사각지대를 원천 차단합니다.
@@ -30,12 +30,12 @@
 
 - **기존 제약(폐기)**: 기존 [`analysisTypeSpec`](../pkg/analyzer/check.go)은 `type T any` 또는 메서드가 없는 빈 `interface{}`만 합타입으로 허용했습니다.
 - **변경 스펙**:
-  - 빈 인터페이스(`any`, `interface{}`)뿐만 아니라 **메서드 시그니처를 포함한 모든 인터페이스 선언**에 `// goaugtype:` 지시자를 사용할 수 있습니다.
-  - 인터페이스 $I$가 메서드 집합 $M$과 유니온 지시자 `// goaugtype: T_1 | T_2 | ... | T_n`을 모두 가질 때, $I$의 최종 타입 셋은 **메서드 집합 $M$을 구현하는 타입들의 집합과 유니온 타입들의 교집합(Intersection)**입니다.
+  - 빈 인터페이스(`any`, `interface{}`)뿐만 아니라 **메서드 시그니처를 포함한 모든 인터페이스 선언**에 `//goaugtype:sum` 지시자를 사용할 수 있습니다.
+  - 인터페이스 $I$가 메서드 집합 $M$과 유니온 지시자 `//goaugtype:sum T_1 | T_2 | ... | T_n`을 모두 가질 때, $I$의 최종 타입 셋은 **메서드 집합 $M$을 구현하는 타입들의 집합과 유니온 타입들의 교집합(Intersection)**입니다.
   - 선언 시점 검증: 유니온에 나열된 각 타입 $T_k$가 인터페이스 $I$의 메서드 집합 $M$을 구현하지 않으면(`!types.Implements(T_k, I)`), 합타입 선언 위치에서 즉시 진단 에러를 보고합니다.
 
 ```go
-// goaugtype: *Leaf | *Node
+//goaugtype:sum *Leaf | *Node
 type Tree interface {
     Walk()
 }
@@ -45,7 +45,7 @@ type Tree interface {
 > **#57644 원문**: *"We propose that we permit an ordinary interface type to embed a union of terms, where each term is itself a type... This proposal does not permit the underlying type syntax `~T` to be used in an ordinary interface type... The types `MyInt` and `MyFloat` implement `I1`. The type `MyOtherInt` does not implement `I1`."*
 
 - **유니온 항에는 타입만 허용 (`nil` 지시자 키워드 제거)**:
-  - `#57644`에서 유니온 `T1 | T2`의 각 항은 반드시 **타입(Type)**이어야 합니다. `nil`은 타입이 아니라 사전 선언된 비타입 식별자(제로값)이므로 `// goaugtype:` 지시자 내에 `nil`을 작성하지 않습니다.
+  - `#57644`에서 유니온 `T1 | T2`의 각 항은 반드시 **타입(Type)**이어야 합니다. `nil`은 타입이 아니라 사전 선언된 비타입 식별자(제로값)이므로 `//goaugtype:sum` 지시자 내에 `nil`을 작성하지 않습니다.
   - 지시자에 `nil`이 포함될 경우 유효하지 않은 유니온 타입 항으로 진단 에러를 보고합니다.
 - **근사 타입(`~T`) 불허**:
   - `#57644`에서 Ian Lance Taylor가 밝혔듯, `~int`와 같은 기저 타입(Underlying type) 근사 문법은 외부 패키지에서 `type switch`로 구체 타입을 추출할 수 있는 언어적 메커니즘이 없으므로 허용하지 않습니다.
@@ -54,7 +54,7 @@ type Tree interface {
   - 유니온 항이 비-인터페이스(구체 타입) $T_k$인 경우, 값의 타입 $V$는 `types.Identical(V, T_k)`를 만족해야 합니다. 기저 타입이 같더라도 다른 정의 타입(Defined Type)이면 허용되지 않습니다.
 - **비타입 상수(Untyped Constants)의 대입**:
   - Go 표준 Assignability 규칙에 따라, 비타입 상수(예: `10`, `"hello"`)가 인터페이스에 대입될 때는 해당 상수의 기본 타입(Default Type: `int`, `float64`, `string`, `bool` 등)으로 평가된 후 타입 셋 포함 여부를 판정합니다.
-  - 예: `// goaugtype: int8 | int16`인 `SmallInt`에 비타입 상수 `10`(기본 타입 `int`)을 대입하면 `int`가 타입 셋에 없으므로 거부됩니다(`int8(10)`으로 명시적 변환 필요).
+  - 예: `//goaugtype:sum int8 | int16`인 `SmallInt`에 비타입 상수 `10`(기본 타입 `int`)을 대입하면 `int`가 타입 셋에 없으므로 거부됩니다(`int8(10)`으로 명시적 변환 필요).
 
 ### 2.3. 인터페이스 항, 중첩 합타입, 그리고 선언부 서로소 원칙(Disjoint Union Invariant)
 > **#57644 원문**: *"Embedding a union in an interface affects the interface's type set."*
@@ -62,7 +62,7 @@ type Tree interface {
 Go의 인터페이스 유니온에서 각 항(Term)은 구체 타입일 수도 있고, 다른 인터페이스나 또 다른 합타입일 수도 있습니다.
 
 1. **중첩 합타입의 평탄화(Type Set Flattening) 및 부분집합 대입**:
-   - 합타입 $I_2$의 허용 목록에 다른 합타입 $I_1$이 포함되면(`// goaugtype: I1 | float64`), $I_2$의 유효 타입 셋은 $\text{TypeSet}(I_1) \cup \{\text{float64}\}$로 평탄화됩니다.
+   - 합타입 $I_2$의 허용 목록에 다른 합타입 $I_1$이 포함되면(`//goaugtype:sum I1 | float64`), $I_2$의 유효 타입 셋은 $\text{TypeSet}(I_1) \cup \{\text{float64}\}$로 평탄화됩니다.
    - 합타입 $S$의 값을 합타입 $T$에 대입할 때, $S$와 $T$가 동일한 타입(`types.Identical`)이 아니더라도 **$\text{TypeSet}(S) \subseteq \text{TypeSet}(T)$이면 대입을 허용**합니다.
 2. **일반 인터페이스 항 지원 (Issue #5 연계)**:
    - 허용 목록에 합타입이 아닌 일반 인터페이스(예: `error`, `io.Reader`)가 포함된 경우, 대입되는 값의 타입 $V$가 해당 인터페이스를 구현(`types.Implements(V, TermInterface)`)하면 유효한 대입으로 판정합니다.
@@ -71,7 +71,7 @@ Go의 인터페이스 유니온에서 각 항(Term)은 구체 타입일 수도 �
      1. **구체 타입 중복 금지**: 평탄화된 두 구체 타입 항 $C_1, C_2$가 `types.Identical(C_1, C_2)`이면 중복 구체 타입 에러를 보고합니다.
      2. **일반 인터페이스 중첩 및 빈 인터페이스 금지**:
         - 모든 일반(비-합타입) 인터페이스 항 $I$는 최소 1개 이상의 메서드를 선언해야 합니다(`I.NumMethods() > 0`; `any` / `interface{}`는 거부됨).
-        - 구체 타입 항 $C$가 같은 합타입 내의 일반 인터페이스 항 $I$를 구현하면(`types.Implements(C, I)`) 선언 에러를 보고합니다. 예를 들어 `// goaugtype: *MyError | error`는 `*MyError`가 이미 `error`의 부분집합이므로 선언 시점에 거부됩니다.
+        - 구체 타입 항 $C$가 같은 합타입 내의 일반 인터페이스 항 $I$를 구현하면(`types.Implements(C, I)`) 선언 에러를 보고합니다. 예를 들어 `//goaugtype:sum *MyError | error`는 `*MyError`가 이미 `error`의 부분집합이므로 선언 시점에 거부됩니다.
         - 두 일반 인터페이스 항 $I_1, I_2$가 포함 관계(`types.Implements(I_1, I_2)` 또는 `types.Implements(I_2, I_1)`)를 가지면 선언 에러를 보고합니다.
 
 ### 2.4. 순수 #57644 모델의 제로값(`nil`) 시맨틱
@@ -117,7 +117,7 @@ Go의 인터페이스 유니온에서 각 항(Term)은 구체 타입일 수도 �
    - 모든 리프 항과 `case nil:`이 처리된 상태에서 `default:` 절은 도달 불가능한 죽은 코드이거나 새로운 타입 추가 시 린터를 무력화하고 내부에서 `nil` 패닉을 유발할 수 있으므로, `default:` 절은 누락된 케이스를 대체하지 않으며 잉여 `default:` 절 사용을 금지합니다.
 
 ### 2.7. 패키지 간(Cross-Package) 분석 아키텍처 (`analysis.Fact`)
-- **문제**: Go의 컴파일 단위는 패키지이며, 다른 패키지에서 import한 타입의 AST 주석(`// goaugtype:`)은 현재 패키지의 `pass.Files`에 존재하지 않습니다.
+- **문제**: Go의 컴파일 단위는 패키지이며, 다른 패키지에서 import한 타입의 AST 주석(`//goaugtype:sum`)은 현재 패키지의 `pass.Files`에 존재하지 않습니다.
 - **해결 설계**:
   - `go/analysis` 프레임워크의 **`analysis.Fact`** 메커니즘을 도입합니다.
   - 패키지 분석 시 합타입으로 선언된 `*types.TypeName` 객체에 직렬화 가능한 Fact 구조체(허용된 타입들의 패키지 경로 및 타입명)를 `pass.ExportObjectFact(typeNameObj, &fact)`로 내보냅니다.

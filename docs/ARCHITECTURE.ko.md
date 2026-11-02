@@ -10,7 +10,7 @@
 
 `goaugtype`은 크게 3개의 계층으로 구성됩니다:
 
-1. **CLI 및 드라이버 계층 (`cmd/goaugadt`)**: `golang.org/x/tools/go/analysis/singlechecker`를 통해 독립 실행형 린터 CLI 및 외부 린터 연동을 제공합니다.
+1. **CLI 및 드라이버 계층 (`cmd/goaugtype`)**: `golang.org/x/tools/go/analysis/singlechecker`를 통해 독립 실행형 린터 CLI 및 외부 린터 연동을 제공합니다.
 2. **코어 정적 분석 엔진 (`pkg/analyzer`)**: AST/주석 수집, `SumTypeSet` 타입 셋 구성, 8가지 할당/변환/단언 경로 및 `type switch` 완전성 검증을 수행합니다 ([`adt.go`](../pkg/analyzer/adt.go), [`check.go`](../pkg/analyzer/check.go) 및 `go/types`에서 1:1로 포팅/생성된 7개 파일 [`typeterm.go`](../pkg/analyzer/typeterm.go), [`termlist.go`](../pkg/analyzer/termlist.go), [`typeset.go`](../pkg/analyzer/typeset.go), [`union.go`](../pkg/analyzer/union.go), [`instantiate.go`](../pkg/analyzer/instantiate.go), [`operand.go`](../pkg/analyzer/operand.go), [`assignments.go`](../pkg/analyzer/assignments.go)).
 3. **업스트림 스냅샷·패치 파이프라인 및 릴리즈 게이트키퍼 (`cmd/upstreamchecker`, `internal/upstream/`, `scripts/`, `upstream.json`)**: `src/go/types` 원본 7개 파일을 [`internal/upstream/testdata/gotypes/`](../internal/upstream/testdata/gotypes)에 무수정 보관하고, [`internal/upstream/patches/`](../internal/upstream/patches)의 패치를 `go generate ./...` 또는 `./scripts/apply-patches.sh`로 적용하며, `go.mod` ↔ `UpstreamBaseRevision` ↔ `upstream.json` ↔ 원본 스냅샷 + 패치 ↔ 업스트림 `golang/go`의 5중 일관성을 검증합니다.
 
@@ -20,7 +20,7 @@
 ```mermaid
 flowchart TB
     subgraph Tooling["CLI 및 릴리즈 도구 계층"]
-        CLI["cmd/goaugadt<br/>(singlechecker 드라이버)"]
+        CLI["cmd/goaugtype<br/>(singlechecker 드라이버)"]
         UCheck["cmd/upstreamchecker<br/>(go/types 변경 감지기)"]
         Scripts["scripts/check-upstream.sh<br/>scripts/release.sh"]
         UJSON[("upstream.json<br/>base_revision & SHA-256 해시")]
@@ -79,7 +79,7 @@ sequenceDiagram
     loop pass.Files 내 모든 파일 순회
         Pass->>Insp: ast.NewCommentMap(fset, file, comments)
         Pass->>Insp: ast.Inspect(file, ispt.inspect)
-        Insp-->>Insp: // goaugtype: 지시자 추출 (adtDecls)
+        Insp-->>Insp: //goaugtype:sum 지시자 추출 (adtDecls)
         Insp-->>Insp: 8대 할당/변환/단언 AST 노드 및 TypeSwitchStmt 수집
     end
 
@@ -178,7 +178,7 @@ classDiagram
 
 ```mermaid
 flowchart TD
-    Start["원시 지시자<br/>// goaugtype: T1 | T2 | ..."] --> SyntaxCheck{"'~T' 또는 'nil'<br/>포함 여부?"}
+    Start["원시 지시자<br/>//goaugtype:sum T1 | T2 | ..."] --> SyntaxCheck{"'~T' 또는 'nil'<br/>포함 여부?"}
     SyntaxCheck -- 예 --> ErrSyntax["문법 에러 보고<br/>(~T 및 nil 불허)"]
     SyntaxCheck -- 아니오 --> Flatten["중첩 합타입 DFS 평탄화<br/>ConcreteTerms (C) & IfaceTerms (I) 분리"]
 
@@ -254,7 +254,7 @@ sequenceDiagram
     participant Framework as go/analysis Fact 저장소
     participant PkgB as Package B (pkgb)
 
-    Note over PkgA: 선언: // goaugtype: *Alpha | *Beta<br/>type ExportedSum any
+    Note over PkgA: 선언: //goaugtype:sum *Alpha | *Beta<br/>type ExportedSum any
     PkgA->>PkgA: BuildRegistry에서 평탄화 및 서로소 검증
     PkgA->>Framework: pass.ExportObjectFact(ExportedSum, &SumTypeFact{<br/>ConcreteTerms: ["*pkga.Alpha", "*pkga.Beta"]})
 

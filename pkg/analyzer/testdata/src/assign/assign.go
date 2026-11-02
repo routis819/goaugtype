@@ -1,6 +1,6 @@
 package assign
 
-// goaugtype: *Leaf | *Node
+//goaugtype:sum *Leaf | *Node
 type Tree any // want Tree:"SumTypeFact\\(\\*assign.Leaf \\| \\*assign.Node\\)"
 
 type Leaf struct{}

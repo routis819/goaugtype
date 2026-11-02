@@ -4,7 +4,7 @@ import (
 	"strings"
 )
 
-// goaugtype: *strings.Reader
+//goaugtype:sum *strings.Reader
 type ImportedTester any // want ImportedTester:"SumTypeFact\\(\\*strings.Reader\\)"
 
 func noop(v any) {}

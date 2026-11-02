@@ -6,7 +6,7 @@ import (
 )
 
 // Tree represents a tree structure, which is very suitable for ADT testing.
-// goaugtype: *Leaf | *Node
+//goaugtype:sum *Leaf | *Node
 type Tree any // want Tree:"SumTypeFact\\(\\*simple.Leaf \\| \\*simple.Node\\)"
 
 type Leaf struct{}
@@ -17,7 +17,7 @@ type NotTree struct{}
 
 type (
 	// TestInt is a sum type of all int family.
-	// goaugtype: int8 | int16 | int32 | int64
+	//goaugtype:sum int8 | int16 | int32 | int64
 	TestInt any // want TestInt:"SumTypeFact\\(int8 \\| int16 \\| int32 \\| int64\\)"
 )
 
