@@ -8,7 +8,7 @@ vars: {
 }
 
 decl: "Declaration Site: BuildRegistry & ValidateTerms()" {
-  raw: "Directive: // goaugtype: T1 | T2 | ..."
+  raw: "Directive: //goaugtype:sum T1 | T2 | ..."
   syntax: "Syntax Guard\nReject '~T' & 'nil'"
   flatten: "DFS Flatten Nested Sum Types\nPartition into ConcreteTerms (C) & IfaceTerms (I)"
   methods: "General Interface Check (#9)\nIf SelfIface.NumMethods() > 0:\nVerify ∀t ∈ C ∪ I: Implements(t, SelfIface)"

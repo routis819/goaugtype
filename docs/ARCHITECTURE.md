@@ -9,7 +9,7 @@ For detailed language specifications and rationale aligned with [golang/go#57644
 ## 1. System Context & Component Topology
 
 `goaugtype` is structured into three primary layers:
-1. **CLI & Driver Layer (`cmd/goaugadt`)**: Wraps the analyzer with `golang.org/x/tools/go/analysis/singlechecker` for standalone CLI execution and standard linter integration.
+1. **CLI & Driver Layer (`cmd/goaugtype`)**: Wraps the analyzer with `golang.org/x/tools/go/analysis/singlechecker` for standalone CLI execution and standard linter integration.
 2. **Core Analysis Engine (`pkg/analyzer`)**: Implements the two-pass AST/type-set static analyzer ([`adt.go`](../pkg/analyzer/adt.go), [`check.go`](../pkg/analyzer/check.go), and the 7 `go/types`-ported files [`typeterm.go`](../pkg/analyzer/typeterm.go), [`termlist.go`](../pkg/analyzer/termlist.go), [`typeset.go`](../pkg/analyzer/typeset.go), [`union.go`](../pkg/analyzer/union.go), [`instantiate.go`](../pkg/analyzer/instantiate.go), [`operand.go`](../pkg/analyzer/operand.go), and [`assignments.go`](../pkg/analyzer/assignments.go)).
 3. **Upstream Synchronization, Patch Pipeline & Release Gatekeeper (`cmd/upstreamchecker`, `internal/upstream/`, `scripts/`, `upstream.json`)**: Keeps pristine `src/go/types` snapshots in `internal/upstream/testdata/gotypes/`, applies unified diffs from `internal/upstream/patches/` via `go generate ./...` or `./scripts/apply-patches.sh`, and enforces 5-way drift-free synchronization across Go releases (`go.mod` ↔ `UpstreamBaseRevision` ↔ `upstream.json` ↔ local snapshots + patches ↔ upstream `golang/go`).
 
@@ -19,7 +19,7 @@ For detailed language specifications and rationale aligned with [golang/go#57644
 ```mermaid
 flowchart TB
     subgraph Tooling["CLI & Release Tooling"]
-        CLI["cmd/goaugadt<br/>(singlechecker driver)"]
+        CLI["cmd/goaugtype<br/>(singlechecker driver)"]
         UCheck["cmd/upstreamchecker<br/>(go/types drift detector)"]
         Scripts["scripts/check-upstream.sh<br/>scripts/release.sh"]
         UJSON[("upstream.json<br/>base_revision & SHA-256 hashes")]
@@ -78,7 +78,7 @@ sequenceDiagram
     loop For each file in pass.Files
         Pass->>Insp: ast.NewCommentMap(fset, file, comments)
         Pass->>Insp: ast.Inspect(file, ispt.inspect)
-        Insp-->>Insp: Extract // goaugtype: directives (adtDecls)
+        Insp-->>Insp: Extract //goaugtype:sum directives (adtDecls)
         Insp-->>Insp: Collect 8 assignability/assertion AST nodes + TypeSwitchStmts
     end
 
@@ -177,7 +177,7 @@ When `BuildRegistry` constructs a `SumTypeSet`, it flattens any nested sum types
 
 ```mermaid
 flowchart TD
-    Start["Raw Directive<br/>// goaugtype: T1 | T2 | ..."] --> SyntaxCheck{"Contains '~T'<br/>or 'nil'?"}
+    Start["Raw Directive<br/>//goaugtype:sum T1 | T2 | ..."] --> SyntaxCheck{"Contains '~T'<br/>or 'nil'?"}
     SyntaxCheck -- Yes --> ErrSyntax["Report Syntax Error<br/>(~T and nil prohibited)"]
     SyntaxCheck -- No --> Flatten["DFS Flatten Nested Sum Types<br/>Partition into ConcreteTerms (C) & IfaceTerms (I)"]
 
@@ -253,7 +253,7 @@ sequenceDiagram
     participant Framework as go/analysis Fact Store
     participant PkgB as Package B (pkgb)
 
-    Note over PkgA: Declares: // goaugtype: *Alpha | *Beta<br/>type ExportedSum any
+    Note over PkgA: Declares: //goaugtype:sum *Alpha | *Beta<br/>type ExportedSum any
     PkgA->>PkgA: BuildRegistry flattens & validates ExportedSum
     PkgA->>Framework: pass.ExportObjectFact(ExportedSum, &SumTypeFact{<br/>ConcreteTerms: ["*pkga.Alpha", "*pkga.Beta"]})
 

@@ -17,35 +17,35 @@ func (n *Node) Walk() string { return "node" }
 
 type NonWalker struct{}
 
-// goaugtype: *Leaf | *Node
+//goaugtype:sum *Leaf | *Node
 type NodeWalker interface { // want NodeWalker:"SumTypeFact\\(\\*typeset.Leaf \\| \\*typeset.Node\\)"
 	Walk() string
 }
 
-// goaugtype: *Leaf | *NonWalker // want "permitted type .* does not implement .*"
+//goaugtype:sum *Leaf | *NonWalker // want "permitted type .* does not implement .*"
 type BadNodeWalker interface {
 	Walk() string
 }
 
-// goaugtype: ~int // want "underlying type syntax ~int is not permitted in sum types"
+//goaugtype:sum ~int // want "underlying type syntax ~int is not permitted in sum types"
 type BadUnderlying any
 
-// goaugtype: nil // want "nil is not a type and is not permitted in sum type directives"
+//goaugtype:sum nil // want "nil is not a type and is not permitted in sum type directives"
 type BadNil any
 
-// goaugtype: int | int // want "duplicate concrete type int in sum type typeset.BadDup"
+//goaugtype:sum int | int // want "duplicate concrete type int in sum type typeset.BadDup"
 type BadDup any
 
-// goaugtype: any // want "empty interface any is not permitted in sum type typeset.BadEmpty"
+//goaugtype:sum any // want "empty interface any is not permitted in sum type typeset.BadEmpty"
 type BadEmpty any
 
-// goaugtype: *MyError | error // want "overlapping union terms: \\*typeset.MyError already implements error in sum type typeset.BadOverlapConcrete"
+//goaugtype:sum *MyError | error // want "overlapping union terms: \\*typeset.MyError already implements error in sum type typeset.BadOverlapConcrete"
 type BadOverlapConcrete any
 
-// goaugtype: io.ReadWriter | io.Reader // want "overlapping interface terms io.ReadWriter and io.Reader in sum type typeset.BadOverlapIfaces"
+//goaugtype:sum io.ReadWriter | io.Reader // want "overlapping interface terms io.ReadWriter and io.Reader in sum type typeset.BadOverlapIfaces"
 type BadOverlapIfaces any
 
-// goaugtype: *Leaf | *Node // want "BadNonInterface is not an interface"
+//goaugtype:sum *Leaf | *Node // want "BadNonInterface is not an interface"
 type BadNonInterface struct{}
 
 var _ io.Reader
@@ -74,7 +74,7 @@ type MyError struct{}
 
 func (e *MyError) Error() string { return "my error" }
 
-// goaugtype: string | error
+//goaugtype:sum string | error
 type StrOrErr any // want StrOrErr:"SumTypeFact\\(string \\| error\\)"
 
 func testStrOrErr() {
@@ -123,10 +123,10 @@ func testStrOrErr() {
 
 // --- Nested sum types and subset assignability (#10) ---
 
-// goaugtype: int8 | int16
+//goaugtype:sum int8 | int16
 type SmallInt any // want SmallInt:"SumTypeFact\\(int8 \\| int16\\)"
 
-// goaugtype: SmallInt | int32 | int64
+//goaugtype:sum SmallInt | int32 | int64
 type AllInt any // want AllInt:"SumTypeFact\\(int8 \\| int16 \\| int32 \\| int64\\)"
 
 func testNestedSum() {

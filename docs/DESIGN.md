@@ -2,14 +2,14 @@
 
 ## 1. Background & Vision
 
-`goaugtype` (`goaugadt`) is a static analysis linter built on `golang.org/x/tools/go/analysis` that brings **Sum Types (Algebraic Data Types)** to Go.
+`goaugtype` is a static analysis linter built on `golang.org/x/tools/go/analysis` that brings **Sum Types (Algebraic Data Types)** to Go.
 
 To resolve specification ambiguities and soundness holes identified in the initial prototype, this document establishes the specification and architecture of `goaugtype` based strictly on the **pure model of [golang/go#57644 (`proposal: spec: sum types based on general interfaces`)](https://github.com/golang/go/issues/57644)**, proposed by Ian Lance Taylor of the Go team.
 
 ### Core Design Philosophy
 1. **Pure Pre-implementation of `golang/go#57644`**:
    - Proposal `#57644` extends type unions (`T1 | T2`), which are currently restricted to generic type parameter constraints, to **ordinary (general) interfaces** used as variable types.
-   - Because the current Go compiler rejects union elements inside ordinary interfaces used as variable types (`interface contains type constraints`), `goaugtype` uses the `// goaugtype: T1 | T2` directive on standard Go interface declarations (`type I any` or `type I interface { ... }`) to **statically emulate the exact Type Set semantics of `#57644`**.
+   - Because the current Go compiler rejects union elements inside ordinary interfaces used as variable types (`interface contains type constraints`), `goaugtype` uses the `//goaugtype:sum T1 | T2` directive on standard Go interface declarations (`type I any` or `type I interface { ... }`) to **statically emulate the exact Type Set semantics of `#57644`**.
 2. **Consistent Type Set Semantics with Disjoint Orthogonality**:
    - Rather than inventing an ad-hoc type system or custom `nil` annotations, sum types are defined as a natural extension of Go 1.18+ **Interface Type Sets, `Implements`, and `Assignability` rules**, reinforced with **Pairwise Disjointness** across flattened union terms so that adding a new variant always triggers exhaustiveness errors across existing `type switch` statements.
 3. **Static Exhaustiveness Checking & Type Erasure Safety**:
@@ -28,12 +28,12 @@ To resolve specification ambiguities and soundness holes identified in the initi
 
 - **Legacy Constraint (Deprecated)**: Previously, [`analysisTypeSpec`](../pkg/analyzer/check.go) only permitted `type T any` or empty `interface{}` declarations without methods.
 - **Updated Specification**:
-  - The `// goaugtype:` directive is permitted on **any interface declaration, including interfaces with method signatures**, not just empty interfaces (`any`, `interface{}`).
-  - When an interface $I$ declares both a method set $M$ and a union directive `// goaugtype: T_1 | T_2 | ... | T_n`, the effective type set of $I$ is the **intersection of the types implementing $M$ and the types in the union**.
+  - The `//goaugtype:sum` directive is permitted on **any interface declaration, including interfaces with method signatures**, not just empty interfaces (`any`, `interface{}`).
+  - When an interface $I$ declares both a method set $M$ and a union directive `//goaugtype:sum T_1 | T_2 | ... | T_n`, the effective type set of $I$ is the **intersection of the types implementing $M$ and the types in the union**.
   - **Declaration-Site Validation**: If any union term $T_k$ does not implement the method set $M$ of interface $I$ (`!types.Implements(T_k, I)`), the analyzer immediately reports a diagnostic at the sum type declaration site.
 
 ```go
-// goaugtype: *Leaf | *Node
+//goaugtype:sum *Leaf | *Node
 type Tree interface {
     Walk()
 }
@@ -43,8 +43,8 @@ type Tree interface {
 > **From #57644**: *"We propose that we permit an ordinary interface type to embed a union of terms, where each term is itself a type... This proposal does not permit the underlying type syntax `~T` to be used in an ordinary interface type... The types `MyInt` and `MyFloat` implement `I1`. The type `MyOtherInt` does not implement `I1`."*
 
 - **Only Types Allowed in Union Terms (`nil` Keyword Removed)**:
-  - In `#57644`, every union term in `T1 | T2` must itself be a type. Because `nil` is an untyped predeclared identifier (zero value) rather than a type, `nil` is **not** written in `// goaugtype:` directives.
-  - If `nil` appears in a `// goaugtype:` directive, the analyzer reports an invalid union term diagnostic.
+  - In `#57644`, every union term in `T1 | T2` must itself be a type. Because `nil` is an untyped predeclared identifier (zero value) rather than a type, `nil` is **not** written in `//goaugtype:sum` directives.
+  - If `nil` appears in a `//goaugtype:sum` directive, the analyzer reports an invalid union term diagnostic.
 - **No Underlying Type Approximation (`~T`)**:
   - As noted in `#57644`, the underlying type syntax (`~int`) is disallowed in general interface sum types because Go lacks a language mechanism to extract an unknown defined type from an interface in a `type switch` across package boundaries.
   - If `~T` appears in a directive, the analyzer reports an explicit syntax diagnostic (`underlying type syntax ~T is not permitted in sum types`).
@@ -52,7 +52,7 @@ type Tree interface {
   - When a union term $T_k$ is a non-interface (concrete) type, a value of type $V$ must satisfy `types.Identical(V, T_k)`. A distinct defined type sharing the same underlying type is not permitted.
 - **Untyped Constants**:
   - Following standard Go assignability rules, when an untyped constant (e.g., `10`, `"hello"`) is assigned to an interface, it is first evaluated as its default type (`int`, `float64`, `string`, `bool`, etc.) before checking membership in the type set.
-  - Example: Assigning an untyped constant `10` (default type `int`) to `SmallInt` (`// goaugtype: int8 | int16`) is rejected because `int` is not in the type set; an explicit conversion (`int8(10)`) is required.
+  - Example: Assigning an untyped constant `10` (default type `int`) to `SmallInt` (`//goaugtype:sum int8 | int16`) is rejected because `int` is not in the type set; an explicit conversion (`int8(10)`) is required.
 
 ### 2.3. Interface Terms, Nested Sum Types, and Disjoint Union Invariant
 > **From #57644**: *"Embedding a union in an interface affects the interface's type set."*
@@ -60,7 +60,7 @@ type Tree interface {
 Each term in a sum type union may be a concrete type, a regular interface, or another sum type.
 
 1. **Type Set Flattening and Subset Assignability**:
-   - If sum type $I_2$ includes another sum type $I_1$ in its directive (`// goaugtype: I1 | float64`), the effective type set of $I_2$ is flattened to $\text{TypeSet}(I_1) \cup \{\text{float64}\}$.
+   - If sum type $I_2$ includes another sum type $I_1$ in its directive (`//goaugtype:sum I1 | float64`), the effective type set of $I_2$ is flattened to $\text{TypeSet}(I_1) \cup \{\text{float64}\}$.
    - Assigning a value of sum type $S$ to a target of sum type $T$ is permitted even when $S$ and $T$ are not identical (`!types.Identical(S, T)`), provided that **$\text{TypeSet}(S) \subseteq \text{TypeSet}(T)$**.
 2. **Regular Interface Terms (Issue #5)**:
    - When a union includes a regular (non-sum) interface term (e.g., `error`, `io.Reader`), assigning a value of type $V$ is valid if $V$ implements that interface (`types.Implements(V, TermInterface)`).
@@ -69,7 +69,7 @@ Each term in a sum type union may be a concrete type, a regular interface, or an
      1. **No Duplicate Concrete Types**: No two flattened concrete terms $C_1, C_2$ may satisfy `types.Identical(C_1, C_2)`.
      2. **No Non-Empty Interface Overlap**:
         - Every regular (non-sum) interface term $I$ must declare at least one method (`I.NumMethods() > 0`; `any` / `interface{}` is rejected).
-        - No concrete term $C$ may implement any regular interface term $I$ in the same sum type (`types.Implements(C, I)` is rejected). For example, `// goaugtype: *MyError | error` is rejected at the declaration site because `*MyError` is already a subset of `error`.
+        - No concrete term $C$ may implement any regular interface term $I$ in the same sum type (`types.Implements(C, I)` is rejected). For example, `//goaugtype:sum *MyError | error` is rejected at the declaration site because `*MyError` is already a subset of `error`.
         - No two regular interface terms $I_1, I_2$ may have a subtype/supertype relationship (`types.Implements(I_1, I_2)` or `types.Implements(I_2, I_1)` is rejected).
 
 ### 2.4. Zero Value (`nil`) Semantics in the Pure #57644 Model
@@ -115,7 +115,7 @@ A non-`nil` value whose type is outside the sum type's type set must not be stor
    - Once all flattened leaf terms and `case nil:` are covered, a `default:` branch is unreachable dead code that can mask future bugs or cause nil panics; therefore, `default:` does not substitute for missing cases and is rejected as redundant when all cases are exhausted.
 
 ### 2.7. Cross-Package Analysis Architecture (`analysis.Fact`)
-- **Problem**: Go's unit of compilation and analysis is a single package; AST comments (`// goaugtype:`) from imported packages are not present in `pass.Files`.
+- **Problem**: Go's unit of compilation and analysis is a single package; AST comments (`//goaugtype:sum`) from imported packages are not present in `pass.Files`.
 - **Architecture**:
   - Uses the **`analysis.Fact`** mechanism from `golang.org/x/tools/go/analysis`.
   - When analyzing a package, `goaugtype` exports a serializable fact (`pass.ExportObjectFact(typeNameObj, &fact)`) attached to each sum type's `*types.TypeName` object.
