@@ -15,6 +15,7 @@ It enforces compile-time type safety for sum types, turning runtime type errors 
 ## Table of Contents
 
 - [Why `goaugtype`?](#why-goaugtype)
+  - [Design Philosophy & Scope](#design-philosophy--scope)
 - [Installation](#installation)
 - [Quick Start](#quick-start)
   - [1. Define Your Sum Type](#1-define-your-sum-type)
@@ -41,6 +42,14 @@ Standard Go interfaces are open sets: any type that satisfies an interface's met
 - Define closed sum types using standard interface syntax augmented with `// goaugtype: Type1 | Type2`.
 - Directly ported from Go standard library's `src/go/types/` type set algebra (`typeterm`, `termlist`, `typeset`, `union`, `instantiate`, `operand`, `assignments`).
 - Enforces compile-time exhaustiveness, leaf-only matching, subtype ordering, pairwise disjointness, and 8-path assignability.
+
+### Design Philosophy & Scope
+
+The author of this project does not claim deep expertise in type system theory. `goaugtype` chose **[golang/go#57644](https://github.com/golang/go/issues/57644)** and directly ported Go's `src/go/types/` algebra rather than inventing ad-hoc rules precisely because `#57644` is a specification written by a trustworthy engineering team with proven authority on Go's type system.
+
+That said, one departure from pure `#57644` deserves a brief explanation: while `#57644` permits overlapping union terms (such as `*MyError | error`) as a standard set union, `goaugtype` enforces **pairwise disjointness** across flattened union terms. This is a pragmatic compromise for a static linter: without disjointness, a broad interface term like `error` in a `type switch` would silently absorb more specific variants—defeating the core guarantee that adding a new variant to a sum type will flag all unhandled `type switch` statements. Even here, we avoided inventing new type theory: this rule strictly narrows the set of accepted declarations (every disjoint sum type remains a valid `#57644` sum type) and directly reuses the `overlappingTerm` check already present in Go's own `src/go/types/union.go`.
+
+By contrast, **generic sum types** (e.g., parameterized sum types or built-in `Result[T, E]` / `Option[T]` containers) introduce fundamental type-system complexities that cannot be solved by a simple subset restriction. Until we discover a proposal that we can equally trust for its technical soundness *and* that possesses an aesthetic naturally embraced by the Go ecosystem, generic-related features will remain on hold.
 
 ---
 
