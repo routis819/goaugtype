@@ -1,4 +1,4 @@
-# goaugtype (goaugadt)
+# goaugtype
 
 [English](./README.md) | [한국어](./README.ko.md)
 
@@ -39,7 +39,7 @@ It enforces compile-time type safety for sum types, turning runtime type errors 
 Standard Go interfaces are open sets: any type that satisfies an interface's method set can be assigned to it, and `switch x.(type)` statements cannot verify whether all possible concrete types have been handled. This presents significant reliability risks when modeling closed domain states, AST nodes, compiler passes, or state machines.
 
 `goaugtype` implements the pure **[golang/go#57644](https://github.com/golang/go/issues/57644)** specification ("general interfaces as sum types"):
-- Define closed sum types using standard interface syntax augmented with `// goaugtype: Type1 | Type2`.
+- Define closed sum types using standard interface syntax augmented with `//goaugtype:sum Type1 | Type2`.
 - Directly ported from Go standard library's `src/go/types/` type set algebra (`typeterm`, `termlist`, `typeset`, `union`, `instantiate`, `operand`, `assignments`).
 - Enforces compile-time exhaustiveness, leaf-only matching, subtype ordering, pairwise disjointness, and 8-path assignability.
 
@@ -56,13 +56,13 @@ By contrast, **generic sum types** (e.g., parameterized sum types or built-in `R
 ## Installation
 
 ```bash
-go install github.com/routiz/goaugt/cmd/goaugadt@latest
+go install github.com/routiz/goaugt/cmd/goaugtype@latest
 ```
 
 Or run via `go vet`:
 
 ```bash
-go vet -vettool=$(which goaugadt) ./...
+go vet -vettool=$(which goaugtype) ./...
 ```
 
 ---
@@ -71,13 +71,13 @@ go vet -vettool=$(which goaugadt) ./...
 
 ### 1. Define Your Sum Type
 
-Declare an interface and define its permitted types using the `// goaugtype:` directive comment:
+Declare an interface and define its permitted types using the `//goaugtype:sum` directive comment:
 
 ```go
 package tree
 
 // Tree represents an algebraic sum type over *Leaf and *Node.
-// goaugtype: *Leaf | *Node
+//goaugtype:sum *Leaf | *Node
 type Tree any
 
 type Leaf struct {
@@ -91,7 +91,7 @@ type Node struct {
 ```
 
 > [!NOTE]
-> Under the pure `#57644` specification, `nil` is **NOT** written in the `// goaugtype:` directive. `nil` is the implicit zero value of every interface sum type. Instead, handling `nil` is mandatory in exhaustive `type switch` statements.
+> Under the pure `#57644` specification, `nil` is **NOT** written in the `//goaugtype:sum` directive. `nil` is the implicit zero value of every interface sum type. Instead, handling `nil` is mandatory in exhaustive `type switch` statements.
 
 ### 2. Exhaustive Type Switch
 
@@ -133,7 +133,7 @@ default: // Error: redundant default block in exhaustive type switch
 ### 3. Run the Analyzer
 
 ```bash
-goaugadt ./...
+goaugtype ./...
 ```
 
 ---
@@ -145,7 +145,7 @@ goaugadt ./...
 Sum types are not restricted to `any`. You can define method signatures on the sum type interface. All permitted types in the union must satisfy the interface's method set:
 
 ```go
-// goaugtype: *Circle | *Square
+//goaugtype:sum *Circle | *Square
 type Shape interface {
     Area() float64
 }
@@ -167,7 +167,7 @@ permitted type *Triangle does not implement Shape (missing method Area)
 Sum types can include regular (non-sum) interfaces with methods (e.g. `error`, `io.Reader`) as union terms:
 
 ```go
-// goaugtype: string | error
+//goaugtype:sum string | error
 type Result any
 ```
 
@@ -178,10 +178,10 @@ Any concrete type implementing `error` is assignable to `Result`. In `type switc
 Sum types can reference other sum types. Nested sum types are recursively flattened into concrete and interface terms, and mathematical subset ($\subseteq$) assignability is enforced:
 
 ```go
-// goaugtype: int8 | int16
+//goaugtype:sum int8 | int16
 type SmallInt any
 
-// goaugtype: SmallInt | int32 | int64
+//goaugtype:sum SmallInt | int32 | int64
 type AllInt any
 ```
 

@@ -26,7 +26,7 @@
 ```
 goaugtype/
 ├── cmd/
-│   ├── goaugadt/               # 단독 실행형 CLI 드라이버 (singlechecker 기반)
+│   ├── goaugtype/              # 단독 실행형 CLI 드라이버 (singlechecker 기반)
 │   └── upstreamchecker/        # 업스트림 드리프트 감지기, 스냅샷 및 패치 관리기
 ├── pkg/
 │   └── analyzer/               # 코어 정적 분석 패키지

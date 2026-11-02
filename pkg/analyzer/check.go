@@ -13,7 +13,7 @@ import (
 
 const (
 	Directive              = "goaugtype"
-	DirectiveCommentPrefix = "// " + Directive + ":"
+	DirectiveCommentPrefix = "//" + Directive + ":sum"
 )
 
 var Analyzer = &analysis.Analyzer{
@@ -59,13 +59,15 @@ SEARCHING:
 	for _, cmtgrp := range cmtgrps {
 		for _, cmt := range cmtgrp.List {
 			if after, ok := strings.CutPrefix(cmt.Text, DirectiveCommentPrefix); ok {
-				pos = cmt.Pos()
-				adtDeclLine = after
-				break SEARCHING
+				if after == "" || after[0] == ' ' || after[0] == '\t' {
+					pos = cmt.Pos()
+					adtDeclLine = after
+					break SEARCHING
+				}
 			}
 		}
 	}
-	if adtDeclLine == "" {
+	if pos == token.NoPos {
 		return nil, token.NoPos, nil
 	}
 	if strings.TrimSpace(adtDeclLine) == "" {

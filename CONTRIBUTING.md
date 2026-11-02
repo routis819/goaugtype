@@ -26,7 +26,7 @@ Thank you for your interest in contributing to `goaugtype`! This document detail
 ```
 goaugtype/
 ├── cmd/
-│   ├── goaugadt/               # Standalone CLI driver (singlechecker)
+│   ├── goaugtype/              # Standalone CLI driver (singlechecker)
 │   └── upstreamchecker/        # Upstream drift detector, snapshot & patch manager
 ├── pkg/
 │   └── analyzer/               # Core static analysis package

@@ -4,5 +4,5 @@ type Alpha struct{}
 type Beta struct{}
 type Gamma struct{}
 
-// goaugtype: *Alpha | *Beta
+//goaugtype:sum *Alpha | *Beta
 type ExportedSum any // want ExportedSum:".*"

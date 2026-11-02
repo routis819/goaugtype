@@ -1,4 +1,4 @@
-# goaugtype (goaugadt)
+# goaugtype
 
 [English](./README.md) | [한국어](./README.ko.md)
 
@@ -39,7 +39,7 @@
 표준 Go 인터페이스는 열린 집합(Open Set)입니다. 인터페이스의 메서드 셋을 만족하는 모든 타입이 대입될 수 있으며, `switch x.(type)` 문에서는 가능한 모든 구체 타입이 처리되었는지 컴파일 시점에 보장할 수 없습니다. 이는 닫힌 도메인 상태, AST 노드, 컴파일러 패스, 상태 기계를 모델링할 때 심각한 런타임 패닉 위험을 초래합니다.
 
 `goaugtype`은 순수 **[golang/go#57644](https://github.com/golang/go/issues/57644)** 명세("general interfaces as sum types")를 구현합니다:
-- 표준 인터페이스 문법과 `// goaugtype: Type1 | Type2` 지시자 주석을 사용하여 닫힌 합타입을 정의합니다.
+- 표준 인터페이스 문법과 `//goaugtype:sum Type1 | Type2` 지시자 주석을 사용하여 닫힌 합타입을 정의합니다.
 - Go 표준 라이브러리 `src/go/types/`의 타입 셋 대수 엔진(`typeterm`, `termlist`, `typeset`, `union`, `instantiate`, `operand`, `assignments`)을 1:1로 직접 포팅하여 완벽한 호환성을 제공합니다.
 - 컴파일 타임 완전성(Exhaustiveness), 리프 매칭, 서브타입 정렬, 쌍별 서로소 불변식, 8대 대입 경로를 엄격하게 검증합니다.
 
@@ -56,13 +56,13 @@
 ## 설치 방법
 
 ```bash
-go install github.com/routiz/goaugt/cmd/goaugadt@latest
+go install github.com/routiz/goaugt/cmd/goaugtype@latest
 ```
 
 또는 `go vet` 도구와 연동하여 실행할 수 있습니다:
 
 ```bash
-go vet -vettool=$(which goaugadt) ./...
+go vet -vettool=$(which goaugtype) ./...
 ```
 
 ---
@@ -71,13 +71,13 @@ go vet -vettool=$(which goaugadt) ./...
 
 ### 1. 합타입 정의
 
-인터페이스를 선언하고 `// goaugtype:` 지시자 주석을 통해 허용되는 타입들을 정의합니다:
+인터페이스를 선언하고 `//goaugtype:sum` 지시자 주석을 통해 허용되는 타입들을 정의합니다:
 
 ```go
 package tree
 
 // Tree는 *Leaf와 *Node로 구성된 대수적 합타입입니다.
-// goaugtype: *Leaf | *Node
+//goaugtype:sum *Leaf | *Node
 type Tree any
 
 type Leaf struct {
@@ -91,7 +91,7 @@ type Node struct {
 ```
 
 > [!NOTE]
-> 순수 `#57644` 명세에 따라 `nil`은 `// goaugtype:` 지시자 주석에 **작성하지 않습니다**. `nil`은 모든 인터페이스 합타입의 암시적 기본값(Zero value)이며, 지시자 대신 `type switch` 문에서 `case nil:`로 반드시 처리해야 합니다.
+> 순수 `#57644` 명세에 따라 `nil`은 `//goaugtype:sum` 지시자 주석에 **작성하지 않습니다**. `nil`은 모든 인터페이스 합타입의 암시적 기본값(Zero value)이며, 지시자 대신 `type switch` 문에서 `case nil:`로 반드시 처리해야 합니다.
 
 ### 2. 완전한 Type Switch 작성
 
@@ -133,7 +133,7 @@ default: // Error: redundant default block in exhaustive type switch
 ### 3. 분석기 실행
 
 ```bash
-goaugadt ./...
+goaugtype ./...
 ```
 
 ---
@@ -145,7 +145,7 @@ goaugadt ./...
 합타입은 단순한 `any`에 국한되지 않습니다. 인터페이스에 메서드 시그니처를 선언할 수 있으며, 유니온에 지정된 모든 허용 타입은 해당 메서드 셋을 반드시 구현해야 합니다:
 
 ```go
-// goaugtype: *Circle | *Square
+//goaugtype:sum *Circle | *Square
 type Shape interface {
     Area() float64
 }
@@ -167,7 +167,7 @@ permitted type *Triangle does not implement Shape (missing method Area)
 합타입 유니온 항으로 메서드를 포함하는 비어 있지 않은 일반 인터페이스(예: `error`, `io.Reader`)를 지정할 수 있습니다:
 
 ```go
-// goaugtype: string | error
+//goaugtype:sum string | error
 type Result any
 ```
 
@@ -178,10 +178,10 @@ type Result any
 합타입이 다른 합타입을 항으로 참조할 수 있습니다. 중첩된 합타입은 구체 타입 및 인터페이스 항으로 재귀적으로 평탄화되며, 집합론적 부분집합($\subseteq$) 대입 관계가 성립합니다:
 
 ```go
-// goaugtype: int8 | int16
+//goaugtype:sum int8 | int16
 type SmallInt any
 
-// goaugtype: SmallInt | int32 | int64
+//goaugtype:sum SmallInt | int32 | int64
 type AllInt any
 ```
 
