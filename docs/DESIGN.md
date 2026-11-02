@@ -14,6 +14,10 @@ To resolve specification ambiguities and soundness holes identified in the initi
    - Rather than inventing an ad-hoc type system or custom `nil` annotations, sum types are defined as a natural extension of Go 1.18+ **Interface Type Sets, `Implements`, and `Assignability` rules**, reinforced with **Pairwise Disjointness** across flattened union terms so that adding a new variant always triggers exhaustiveness errors across existing `type switch` statements.
 3. **Static Exhaustiveness Checking & Type Erasure Safety**:
    - While `#57644` deferred compiler-enforced `type switch` exhaustiveness for backward compatibility, `goaugtype` acts as a strict linter that verifies whether `type switch` statements exhaustively handle all leaf elements in a sum type's type set plus the interface zero value (`nil`), while preventing runtime type erasure shadowing.
+4. **Specification Humility & Deferral of Generic Sum Types**:
+   - The author does not claim deep expertise in type system theory; `#57644` and Go's `src/go/types/` algebra were chosen specifically because they come from a trustworthy engineering team with proven authority on Go's type system.
+   - Our single departure from `#57644`—enforcing **pairwise disjointness** across union terms—is a conservative subset restriction required so that broad interface terms (like `error`) cannot silently absorb new variants in `type switch` exhaustiveness checks, and even this check directly reuses `overlappingTerm` from `src/go/types/union.go`.
+   - Conversely, **generic sum types** and functional ADT containers (`Result[T, E]`, `Option[T]`) involve fundamental type-system complexities beyond simple subset restrictions. Until a proposal emerges that we can equally trust for its soundness and that fits naturally into the Go ecosystem's aesthetic, generic-related features remain on hold.
 
 ---
 
