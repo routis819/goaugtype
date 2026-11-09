@@ -2,8 +2,8 @@
 
 [English](./README.md) | [한국어](./README.ko.md)
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/routiz/goaugt.svg)](https://pkg.go.dev/github.com/routiz/goaugt)
-[![Go Report Card](https://goreportcard.com/badge/github.com/routiz/goaugt)](https://goreportcard.com/report/github.com/routiz/goaugt)
+[![Go Reference](https://pkg.go.dev/badge/github.com/routis819/goaugtype.svg)](https://pkg.go.dev/github.com/routis819/goaugtype)
+[![Go Report Card](https://goreportcard.com/badge/github.com/routis819/goaugtype)](https://goreportcard.com/report/github.com/routis819/goaugtype)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
 **`goaugtype` is a static analysis tool that brings pure [golang/go#57644](https://github.com/golang/go/issues/57644) General Interface Sum Types (Algebraic Data Types / ADTs) to Go.**
@@ -56,7 +56,7 @@ By contrast, **generic sum types** (e.g., parameterized sum types or built-in `R
 ## Installation
 
 ```bash
-go install github.com/routiz/goaugt/cmd/goaugtype@latest
+go install github.com/routis819/goaugtype/cmd/goaugtype@latest
 ```
 
 Or run via `go vet`:

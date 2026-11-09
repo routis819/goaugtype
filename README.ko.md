@@ -2,8 +2,8 @@
 
 [English](./README.md) | [한국어](./README.ko.md)
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/routiz/goaugt.svg)](https://pkg.go.dev/github.com/routiz/goaugt)
-[![Go Report Card](https://goreportcard.com/badge/github.com/routiz/goaugt)](https://goreportcard.com/report/github.com/routiz/goaugt)
+[![Go Reference](https://pkg.go.dev/badge/github.com/routis819/goaugtype.svg)](https://pkg.go.dev/github.com/routis819/goaugtype)
+[![Go Report Card](https://goreportcard.com/badge/github.com/routis819/goaugtype)](https://goreportcard.com/report/github.com/routis819/goaugtype)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
 **`goaugtype`은 순수 [golang/go#57644](https://github.com/golang/go/issues/57644) 일반 인터페이스 합타입(General Interface Sum Types / Algebraic Data Types, ADT) 명세를 Go 언어에 제공하는 정적 분석 도구입니다.**
@@ -56,7 +56,7 @@
 ## 설치 방법
 
 ```bash
-go install github.com/routiz/goaugt/cmd/goaugtype@latest
+go install github.com/routis819/goaugtype/cmd/goaugtype@latest
 ```
 
 또는 `go vet` 도구와 연동하여 실행할 수 있습니다:

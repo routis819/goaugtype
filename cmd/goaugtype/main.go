@@ -8,7 +8,7 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"github.com/routiz/goaugt/pkg/analyzer"
+	"github.com/routis819/goaugtype/pkg/analyzer"
 	"golang.org/x/tools/go/analysis/singlechecker"
 )
 

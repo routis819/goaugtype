@@ -1,4 +1,4 @@
-module github.com/routiz/goaugt
+module github.com/routis819/goaugtype
 
 go 1.27.3
 

@@ -3,7 +3,7 @@ package analyzer_test
 import (
 	"testing"
 
-	"github.com/routiz/goaugt/pkg/analyzer"
+	"github.com/routis819/goaugtype/pkg/analyzer"
 	"golang.org/x/tools/go/analysis/analysistest"
 )
 
